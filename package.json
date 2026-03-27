@@ -1,0 +1,9 @@
+{
+  "name": "inventree-import-plugin",
+  "private": true,
+  "scripts": {
+    "test": "python3 -m pytest tests/ -v",
+    "lint": "ruff check inventree_import_plugin/",
+    "typecheck": "python3 -m mypy inventree_import_plugin/ --ignore-missing-imports"
+  }
+}
