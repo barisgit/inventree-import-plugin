@@ -1,3 +1,5 @@
+
+
 from __future__ import annotations
 
 import logging
@@ -11,18 +13,27 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("inventree_import_plugin")
 
+
+class _FallbackBase:
+    """Stub used when InvenTree is not installed."""
+
+
+class _FallbackMixin:
+    """Stub used when InvenTree is not installed."""
+
+
 try:
-    from plugin import InvenTreePlugin
-    from plugin.mixins import SupplierMixin
+    from plugin import InvenTreePlugin as _InvenTreePlugin
+    from plugin.mixins import SupplierMixin as _SupplierMixin
 
     _INVENTREE_AVAILABLE = True
 except ImportError:
-    InvenTreePlugin = object
-    SupplierMixin = object
+    _InvenTreePlugin = _FallbackBase
+    _SupplierMixin = _FallbackMixin
     _INVENTREE_AVAILABLE = False
 
 
-class BaseImportPlugin(SupplierMixin, InvenTreePlugin):  # type: ignore[misc]
+class BaseImportPlugin(_SupplierMixin, _InvenTreePlugin):  # type: ignore[misc]
     VERSION = PLUGIN_VERSION
 
     def get_pricing_data(self, data: PartData) -> dict[int, tuple[float, str]]:
