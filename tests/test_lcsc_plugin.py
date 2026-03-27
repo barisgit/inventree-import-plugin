@@ -53,7 +53,7 @@ class TestGetSearchResults:
 
     def test_maps_fields_correctly(self, plugin: LCSCImportPlugin) -> None:
         with patch("inventree_import_plugin.lcsc_plugin.search_lcsc", return_value=self._raw):
-            results = plugin.get_search_results("LM358")
+            results = plugin.get_search_results("lcsc", "LM358")
 
         assert results[0] == {
             "supplier_part_number": "C12345",
@@ -64,19 +64,19 @@ class TestGetSearchResults:
 
     def test_none_fields_coerced_to_empty_string(self, plugin: LCSCImportPlugin) -> None:
         with patch("inventree_import_plugin.lcsc_plugin.search_lcsc", return_value=self._raw):
-            results = plugin.get_search_results("anything")
+            results = plugin.get_search_results("lcsc", "anything")
 
         assert results[1]["manufacturer_part_number"] == ""
         assert results[1]["description"] == ""
 
     def test_returns_all_results(self, plugin: LCSCImportPlugin) -> None:
         with patch("inventree_import_plugin.lcsc_plugin.search_lcsc", return_value=self._raw):
-            results = plugin.get_search_results("x")
+            results = plugin.get_search_results("lcsc", "x")
         assert len(results) == 2
 
     def test_empty_search_returns_empty_list(self, plugin: LCSCImportPlugin) -> None:
         with patch("inventree_import_plugin.lcsc_plugin.search_lcsc", return_value=[]):
-            results = plugin.get_search_results("nomatch")
+            results = plugin.get_search_results("lcsc", "nomatch")
         assert results == []
 
 
@@ -99,7 +99,7 @@ _SAMPLE_PART = PartData(
 class TestGetImportData:
     def test_returns_part_data(self, plugin: LCSCImportPlugin) -> None:
         with patch("inventree_import_plugin.lcsc_plugin.fetch_lcsc_part", return_value=_SAMPLE_PART):
-            part = plugin.get_import_data("C12345")
+            part = plugin.get_import_data("lcsc", "C12345")
         assert isinstance(part, PartData)
         assert part.sku == "C12345"
 
@@ -108,7 +108,7 @@ class TestGetImportData:
             patch("inventree_import_plugin.lcsc_plugin.fetch_lcsc_part", return_value=_SAMPLE_PART),
             patch.object(plugin, "get_setting", return_value=True),
         ):
-            part = plugin.get_import_data("C12345")
+            part = plugin.get_import_data("lcsc", "C12345")
         assert part.image_url == "https://example.com/img.jpg"
 
     def test_image_url_cleared_when_download_images_false(self, plugin: LCSCImportPlugin) -> None:
@@ -116,12 +116,12 @@ class TestGetImportData:
             patch("inventree_import_plugin.lcsc_plugin.fetch_lcsc_part", return_value=_SAMPLE_PART),
             patch.object(plugin, "get_setting", return_value=False),
         ):
-            part = plugin.get_import_data("C12345")
+            part = plugin.get_import_data("lcsc", "C12345")
         assert part.image_url == ""
 
     def test_passes_part_number_to_fetch(self, plugin: LCSCImportPlugin) -> None:
         with patch("inventree_import_plugin.lcsc_plugin.fetch_lcsc_part", return_value=_SAMPLE_PART) as mock:
-            plugin.get_import_data("C99999")
+            plugin.get_import_data("lcsc", "C99999")
         mock.assert_called_once_with("C99999")
 
 

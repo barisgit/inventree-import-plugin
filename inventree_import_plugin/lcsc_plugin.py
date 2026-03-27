@@ -63,13 +63,14 @@ class LCSCImportPlugin(_SettingsMixin, BaseImportPlugin):  # type: ignore[misc]
             }
         ]
 
-    def get_search_results(self, keyword: str) -> list[dict[str, Any]]:
+    def get_search_results(self, supplier_slug: str, keyword: str) -> list[dict[str, Any]]:
         """Search LCSC for *keyword* and return a list of candidate parts.
 
         Each dict contains the fields needed by InvenTree to display search
         results before the user picks one to import.
 
         Args:
+            supplier_slug: Supplier identifier (unused; LCSC only serves one supplier).
             keyword: Search term (part number or description fragment).
 
         Returns:
@@ -87,13 +88,14 @@ class LCSCImportPlugin(_SettingsMixin, BaseImportPlugin):  # type: ignore[misc]
             for r in raw_results
         ]
 
-    def get_import_data(self, supplier_part_number: str) -> PartData:
+    def get_import_data(self, supplier_slug: str, supplier_part_number: str) -> PartData:
         """Fetch full part data for *supplier_part_number* from LCSC.
 
         If the ``DOWNLOAD_IMAGES`` setting is disabled, the image URL is
         cleared so InvenTree will not attempt to download it.
 
         Args:
+            supplier_slug: Supplier identifier (unused; LCSC only serves one supplier).
             supplier_part_number: LCSC part code, e.g. ``C12345``.
 
         Returns:
