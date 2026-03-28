@@ -80,6 +80,60 @@ class TestGetSearchResults:
         assert results == []
 
 
+class TestGetSearchResultsProductCodeFallback:
+    _part = PartData(
+        sku="C5248079",
+        name="Some MOSFET",
+        description="N-channel MOSFET",
+        manufacturer_name="Wuxi NCE Power",
+        manufacturer_part_number="NCE30P12",
+        link="https://www.lcsc.com/product-detail/C5248079.html",
+        image_url="https://example.com/img.jpg",
+    )
+
+    def test_product_code_uses_detail_api(self, plugin: LCSCImportPlugin) -> None:
+        with patch("inventree_import_plugin.lcsc_plugin.fetch_lcsc_part", return_value=self._part) as mock_fetch:
+            results = plugin.get_search_results("lcsc", "C5248079")
+        mock_fetch.assert_called_once_with("C5248079")
+        assert len(results) == 1
+        assert results[0].sku == "C5248079"
+        assert results[0].exact is True
+
+    def test_product_code_result_has_correct_fields(self, plugin: LCSCImportPlugin) -> None:
+        with patch("inventree_import_plugin.lcsc_plugin.fetch_lcsc_part", return_value=self._part):
+            results = plugin.get_search_results("lcsc", "C5248079")
+        r = results[0]
+        assert r.name == "Some MOSFET"
+        assert r.description == "N-channel MOSFET"
+        assert r.link == "https://www.lcsc.com/product-detail/C5248079.html"
+        assert r.image_url == "https://example.com/img.jpg"
+
+    def test_lowercase_c_prefix_also_triggers_fallback(self, plugin: LCSCImportPlugin) -> None:
+        with patch("inventree_import_plugin.lcsc_plugin.fetch_lcsc_part", return_value=self._part) as mock_fetch:
+            results = plugin.get_search_results("lcsc", "c5248079")
+        mock_fetch.assert_called_once_with("c5248079")
+        assert results[0].exact is True
+
+    def test_fetch_error_returns_empty_list(self, plugin: LCSCImportPlugin) -> None:
+        with patch("inventree_import_plugin.lcsc_plugin.fetch_lcsc_part", side_effect=RuntimeError("network error")):
+            results = plugin.get_search_results("lcsc", "C5248079")
+        assert results == []
+
+    def test_non_product_code_uses_keyword_search(self, plugin: LCSCImportPlugin) -> None:
+        with (
+            patch("inventree_import_plugin.lcsc_plugin.search_lcsc", return_value=self._raw) as mock_search,
+            patch("inventree_import_plugin.lcsc_plugin.fetch_lcsc_part") as mock_fetch,
+        ):
+            results = plugin.get_search_results("lcsc", "LM358")
+        mock_search.assert_called_once_with("LM358")
+        mock_fetch.assert_not_called()
+        assert len(results) == 1
+
+    _raw = [
+        {"productCode": "C12345", "productModel": "LM358", "productIntroEn": "Dual op-amp"},
+    ]
+
+
 # ---------------------------------------------------------------------------
 # get_import_data
 # ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from inventree_import_plugin import PLUGIN_VERSION
@@ -11,6 +12,8 @@ from inventree_import_plugin.models import PartData
 from inventree_import_plugin.suppliers.lcsc import fetch_lcsc_part, search_lcsc
 
 logger = logging.getLogger(__name__)
+
+_LCSC_PART_CODE_RE = re.compile(r"^C\d+$", re.IGNORECASE)
 
 
 class LCSCImportPlugin(BaseImportPlugin):
@@ -54,6 +57,23 @@ class LCSCImportPlugin(BaseImportPlugin):
         Returns:
             List of :class:`~plugin.base.supplier.helpers.SearchResult` instances.
         """
+        if _LCSC_PART_CODE_RE.match(keyword):
+            try:
+                part = fetch_lcsc_part(keyword)
+            except Exception:
+                logger.warning("fetch_lcsc_part failed for product code %s", keyword)
+                return []
+            return [
+                SearchResult(
+                    sku=part.sku,
+                    name=part.name,
+                    exact=True,
+                    description=part.description,
+                    link=part.link,
+                    image_url=part.image_url,
+                )
+            ]
+
         raw_results = search_lcsc(keyword)
         return [
             SearchResult(
