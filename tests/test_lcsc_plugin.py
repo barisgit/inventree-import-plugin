@@ -138,7 +138,8 @@ class TestPluginMetadata:
         assert LCSCImportPlugin.SLUG == "lcsc-import"
 
     def test_version(self) -> None:
-        assert LCSCImportPlugin.VERSION == "0.1.0"
+        from inventree_import_plugin import PLUGIN_VERSION
+        assert LCSCImportPlugin.VERSION == PLUGIN_VERSION
 
     def test_download_images_default_true(self) -> None:
         plugin = LCSCImportPlugin()
