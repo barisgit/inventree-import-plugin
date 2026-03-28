@@ -1,5 +1,6 @@
 const PANEL_KEY_ATTR = 'data-enrich-panel-key';
 const MODAL_KEY_ATTR = 'data-enrich-modal-key';
+const ROOT_KEY_ATTR = 'data-enrich-root-key';
 
 export function renderEnrichPanel(target, data) {
     if (!(target instanceof HTMLElement) || !data || data.model !== 'part') {
@@ -17,9 +18,13 @@ export function renderEnrichPanel(target, data) {
 
     const panelKey = `${pluginSlug}:${partId}`;
 
-    _removeStalePanels(panelKey, target);
+    _removeStaleRoots(panelKey, target);
     _clearChildren(target);
     target.setAttribute(PANEL_KEY_ATTR, panelKey);
+
+    const root = document.createElement('div');
+    root.setAttribute(ROOT_KEY_ATTR, panelKey);
+    target.appendChild(root);
 
     const button = document.createElement('button');
     button.type = 'button';
@@ -27,7 +32,7 @@ export function renderEnrichPanel(target, data) {
     button.className = 'btn btn-sm btn-primary';
     button.addEventListener('click', () => _openPreviewModal({ panelKey, pluginSlug, supplierName, partId }));
 
-    target.appendChild(button);
+    root.appendChild(button);
 }
 
 async function _openPreviewModal(ctx) {
@@ -249,11 +254,10 @@ function _enrichUrl(ctx) {
     return `/plugin/${ctx.pluginSlug}/enrich/${ctx.partId}/`;
 }
 
-function _removeStalePanels(panelKey, currentTarget) {
-    for (const node of document.querySelectorAll(`[${PANEL_KEY_ATTR}="${panelKey}"]`)) {
-        if (node !== currentTarget) {
-            _clearChildren(node);
-            node.removeAttribute(PANEL_KEY_ATTR);
+function _removeStaleRoots(panelKey, currentTarget) {
+    for (const node of document.querySelectorAll(`[${ROOT_KEY_ATTR}="${panelKey}"]`)) {
+        if (!currentTarget.contains(node)) {
+            node.remove();
         }
     }
 }
