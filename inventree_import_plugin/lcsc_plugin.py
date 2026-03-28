@@ -7,26 +7,13 @@ from typing import Any
 
 from inventree_import_plugin import PLUGIN_VERSION
 from inventree_import_plugin.base import BaseImportPlugin
-from inventree_import_plugin.models import PartData
+from inventree_import_plugin.models import PartData, SearchResult, Supplier
 from inventree_import_plugin.suppliers.lcsc import fetch_lcsc_part, search_lcsc
 
 logger = logging.getLogger(__name__)
 
-try:
-    from plugin.mixins import SettingsMixin as _SettingsMixin
-except ImportError:
 
-    class _SettingsMixin:  # type: ignore[no-redef]
-        """Fallback when InvenTree is not installed."""
-
-        SETTINGS: dict[str, Any] = {}
-
-        def get_setting(self, key: str, default: Any = None) -> Any:
-            entry = self.SETTINGS.get(key, {})
-            return entry.get("default", default)
-
-
-class LCSCImportPlugin(_SettingsMixin, BaseImportPlugin):  # type: ignore[misc]
+class LCSCImportPlugin(BaseImportPlugin):
     """Import parts from LCSC Electronics into InvenTree.
 
     Searches the LCSC catalogue and maps results to InvenTree's supplier
@@ -53,17 +40,17 @@ class LCSCImportPlugin(_SettingsMixin, BaseImportPlugin):  # type: ignore[misc]
     # SupplierMixin interface
     # ------------------------------------------------------------------
 
-    def get_suppliers(self) -> list[dict[str, str]]:
+    def get_suppliers(self) -> list[Supplier]:
         """Return the list of suppliers provided by this plugin."""
         return [
-            {
-                "name": "LCSC",
-                "description": "LCSC Electronics",
-                "website": "https://lcsc.com",
-            }
+            Supplier(
+                name="LCSC",
+                description="LCSC Electronics",
+                website="https://lcsc.com",
+            )
         ]
 
-    def get_search_results(self, supplier_slug: str, keyword: str) -> list[dict[str, Any]]:
+    def get_search_results(self, supplier_slug: str, keyword: str) -> list[SearchResult]:
         """Search LCSC for *keyword* and return a list of candidate parts.
 
         Each dict contains the fields needed by InvenTree to display search
@@ -79,12 +66,12 @@ class LCSCImportPlugin(_SettingsMixin, BaseImportPlugin):  # type: ignore[misc]
         """
         raw_results = search_lcsc(keyword)
         return [
-            {
-                "supplier_part_number": r.get("productCode") or "",
-                "manufacturer": r.get("brandNameEn") or "",
-                "manufacturer_part_number": r.get("productModel") or "",
-                "description": r.get("productIntroEn") or "",
-            }
+            SearchResult(
+                supplier_part_number=r.get("productCode") or "",
+                manufacturer=r.get("brandNameEn") or "",
+                manufacturer_part_number=r.get("productModel") or "",
+                description=r.get("productIntroEn") or "",
+            )
             for r in raw_results
         ]
 

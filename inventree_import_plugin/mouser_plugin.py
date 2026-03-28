@@ -7,26 +7,13 @@ from typing import Any
 
 from inventree_import_plugin import PLUGIN_VERSION
 from inventree_import_plugin.base import BaseImportPlugin
-from inventree_import_plugin.models import PartData
+from inventree_import_plugin.models import PartData, SearchResult, Supplier
 from inventree_import_plugin.suppliers.mouser import fetch_mouser_part, search_mouser
 
 logger = logging.getLogger(__name__)
 
-try:
-    from plugin.mixins import SettingsMixin as _SettingsMixin
-except ImportError:
 
-    class _SettingsMixin:  # type: ignore[no-redef]
-        """Fallback when InvenTree is not installed."""
-
-        SETTINGS: dict[str, Any] = {}
-
-        def get_setting(self, key: str, default: Any = None) -> Any:
-            entry = self.SETTINGS.get(key, {})
-            return entry.get("default", default)
-
-
-class MouserImportPlugin(_SettingsMixin, BaseImportPlugin):  # type: ignore[misc]
+class MouserImportPlugin(BaseImportPlugin):
     """Import parts from Mouser Electronics into InvenTree.
 
     Searches the Mouser catalogue via the Mouser Search API and maps results
@@ -59,17 +46,17 @@ class MouserImportPlugin(_SettingsMixin, BaseImportPlugin):  # type: ignore[misc
     # SupplierMixin interface
     # ------------------------------------------------------------------
 
-    def get_suppliers(self) -> list[dict[str, str]]:
+    def get_suppliers(self) -> list[Supplier]:
         """Return the list of suppliers provided by this plugin."""
         return [
-            {
-                "name": "Mouser",
-                "description": "Mouser Electronics",
-                "website": "https://www.mouser.com",
-            }
+            Supplier(
+                name="Mouser",
+                description="Mouser Electronics",
+                website="https://www.mouser.com",
+            )
         ]
 
-    def get_search_results(self, supplier_slug: str, term: str) -> list[dict[str, Any]]:
+    def get_search_results(self, supplier_slug: str, term: str) -> list[SearchResult]:
         """Search Mouser for *term* and return a list of candidate parts.
 
         Args:
@@ -83,12 +70,12 @@ class MouserImportPlugin(_SettingsMixin, BaseImportPlugin):  # type: ignore[misc
         api_key: str = self.get_setting("MOUSER_API_KEY")
         results = search_mouser(api_key, term)
         return [
-            {
-                "supplier_part_number": r.sku,
-                "manufacturer": r.manufacturer_name,
-                "manufacturer_part_number": r.manufacturer_part_number,
-                "description": r.description,
-            }
+            SearchResult(
+                supplier_part_number=r.sku,
+                manufacturer=r.manufacturer_name,
+                manufacturer_part_number=r.manufacturer_part_number,
+                description=r.description,
+            )
             for r in results
         ]
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TypedDict
 
 
 @dataclass
@@ -39,3 +40,20 @@ class PartData:
 
     # Extra supplier-specific data
     extra_data: dict = field(default_factory=dict)  # type: ignore[type-arg]
+
+
+class Supplier(TypedDict):
+    """Supplier entry returned by ``get_suppliers()``."""
+
+    name: str
+    description: str
+    website: str
+
+
+class SearchResult(TypedDict):
+    """Search result entry returned by ``get_search_results()``."""
+
+    supplier_part_number: str
+    manufacturer: str
+    manufacturer_part_number: str
+    description: str
