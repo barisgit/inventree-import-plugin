@@ -50,10 +50,28 @@ except ImportError:
         link: str | None = None
         image_url: str | None = None
         id: str | None = None
+        existing_part: Any | None = None
 
 
 class BaseImportPlugin(_SupplierMixin, _InvenTreePlugin):  # type: ignore[misc]
     VERSION = PLUGIN_VERSION
+
+    def _annotate_existing_parts(self, results: list[SearchResult]) -> None:
+        """Set existing_part on each result where a matching SupplierPart already exists."""
+        if not _INVENTREE_AVAILABLE:
+            return
+        from company.models import SupplierPart
+
+        for result in results:
+            supplier_part = (
+                SupplierPart.objects.filter(
+                    supplier=self.supplier_company, SKU=result.sku
+                )
+                .select_related("part")
+                .first()
+            )
+            if supplier_part is not None:
+                result.existing_part = supplier_part.part
 
     def get_pricing_data(self, data: PartData) -> dict[int, tuple[float, str]]:
         return {pb.quantity: (pb.price, pb.currency) for pb in data.price_breaks}

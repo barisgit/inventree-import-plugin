@@ -63,7 +63,7 @@ class LCSCImportPlugin(BaseImportPlugin):
             except Exception:
                 logger.warning("fetch_lcsc_part failed for product code %s", keyword)
                 return []
-            return [
+            results = [
                 SearchResult(
                     sku=part.sku,
                     name=part.name,
@@ -73,9 +73,11 @@ class LCSCImportPlugin(BaseImportPlugin):
                     image_url=part.image_url,
                 )
             ]
+            self._annotate_existing_parts(results)
+            return results
 
         raw_results = search_lcsc(keyword)
-        return [
+        results = [
             SearchResult(
                 sku=r.get("productCode") or "",
                 name=r.get("productModel") or "",
@@ -84,6 +86,8 @@ class LCSCImportPlugin(BaseImportPlugin):
             )
             for r in raw_results
         ]
+        self._annotate_existing_parts(results)
+        return results
 
     def get_import_data(self, supplier_slug: str, supplier_part_number: str) -> PartData:
         """Fetch full part data for *supplier_part_number* from LCSC.

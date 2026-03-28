@@ -7,6 +7,30 @@ import types
 from dataclasses import dataclass
 
 
+def _make_company_stubs() -> dict[str, types.ModuleType]:
+    """Return minimal stubs for InvenTree company modules."""
+    company_mod = types.ModuleType("company")
+    models_mod = types.ModuleType("company.models")
+
+    class _QuerySet:
+        def filter(self, **kwargs: object) -> _QuerySet:
+            return self
+
+        def select_related(self, *fields: str) -> _QuerySet:
+            return self
+
+        def first(self) -> None:
+            return None
+
+    class SupplierPart:
+        objects = _QuerySet()
+
+    models_mod.SupplierPart = SupplierPart  # type: ignore[attr-defined]
+    company_mod.models = models_mod  # type: ignore[attr-defined]
+
+    return {"company": company_mod, "company.models": models_mod}
+
+
 def _make_plugin_stubs() -> dict[str, types.ModuleType]:
     """Return minimal stubs for InvenTree plugin modules."""
     plugin_mod = types.ModuleType("plugin")
@@ -29,6 +53,8 @@ def _make_plugin_stubs() -> dict[str, types.ModuleType]:
     class SupplierMixin(SettingsMixin):
         """Minimal stub — satisfies SupplierMixin import in base.py."""
 
+        supplier_company: object = None
+
     class InvenTreePlugin(SettingsMixin):
         """Minimal stub — satisfies InvenTreePlugin import in base.py."""
 
@@ -47,6 +73,7 @@ def _make_plugin_stubs() -> dict[str, types.ModuleType]:
         link: str | None = None
         image_url: str | None = None
         id: str | None = None
+        existing_part: object = None
 
     mixins_mod.SettingsMixin = SettingsMixin  # type: ignore[attr-defined]
     mixins_mod.SupplierMixin = SupplierMixin  # type: ignore[attr-defined]
@@ -69,4 +96,7 @@ def _make_plugin_stubs() -> dict[str, types.ModuleType]:
 # Register the stubs before any project module is imported.
 if "plugin" not in sys.modules:
     for _mod_name, _mod in _make_plugin_stubs().items():
+        sys.modules[_mod_name] = _mod
+if "company" not in sys.modules:
+    for _mod_name, _mod in _make_company_stubs().items():
         sys.modules[_mod_name] = _mod

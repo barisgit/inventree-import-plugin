@@ -61,8 +61,8 @@ class MouserImportPlugin(BaseImportPlugin):
             List of :class:`~plugin.base.supplier.helpers.SearchResult` instances.
         """
         api_key: str = self.get_setting("MOUSER_API_KEY")
-        results = search_mouser(api_key, term)
-        return [
+        raw = search_mouser(api_key, term)
+        results = [
             SearchResult(
                 sku=r.sku,
                 name=r.name,
@@ -71,8 +71,10 @@ class MouserImportPlugin(BaseImportPlugin):
                 link=r.link,
                 image_url=r.image_url,
             )
-            for r in results
+            for r in raw
         ]
+        self._annotate_existing_parts(results)
+        return results
 
     def get_import_data(self, supplier_slug: str, part_id: str) -> PartData | None:
         """Fetch full part data for *part_id* from Mouser.
