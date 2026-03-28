@@ -13,7 +13,7 @@
  *     .supplier_name    - Human-readable supplier name ('Mouser' or 'LCSC')
  */
 export function renderEnrichPanel(target, data) {
-    if (data.model !== 'part') {
+    if (!(target instanceof HTMLElement) || !data || data.model !== 'part') {
         return;
     }
 
@@ -34,6 +34,12 @@ export function renderEnrichPanel(target, data) {
     container.appendChild(button);
     container.appendChild(output);
     target.appendChild(container);
+
+    if (!pluginSlug || !supplierName || !partId) {
+        button.disabled = true;
+        _renderError(output, 'Panel context is incomplete. Refresh the page and try again.');
+        return;
+    }
 
     button.addEventListener('click', async () => {
         button.disabled = true;
