@@ -12,6 +12,33 @@ __all__ = ["BaseImportPlugin", "SearchResult", "Supplier"]
 logger = logging.getLogger("inventree_import_plugin")
 
 
+def _get_parameter_model_dependencies() -> tuple[Any, Any, Any | None]:
+    """Return parameter models for the active InvenTree version."""
+    try:
+        from common.models import Parameter, ParameterTemplate
+        from django.contrib.contenttypes.models import ContentType
+
+        return Parameter, ParameterTemplate, ContentType
+    except ImportError:
+        from part.models import PartParameter, PartParameterTemplate
+
+        return PartParameter, PartParameterTemplate, None
+
+
+def _parameter_filter_kwargs(
+    part: Any, template: Any, content_type_model: Any | None
+) -> dict[str, Any]:
+    """Build filter kwargs for either legacy or generic parameter models."""
+    if content_type_model is None:
+        return {"part": part, "template": template}
+
+    return {
+        "model_type": content_type_model.objects.get_for_model(part),
+        "model_id": part.pk,
+        "template": template,
+    }
+
+
 class _FallbackBase:
     """Stub used when InvenTree is not installed."""
 
@@ -156,11 +183,14 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
         Returns a dict with keys: ``updated``, ``skipped``, ``errors``.
         """
         from company.models import SupplierPart, SupplierPriceBreak
-        from part.models import Part, PartParameter, PartParameterTemplate
+        from part.models import Part
 
         updated: list[str] = []
         skipped: list[str] = []
         errors: list[str] = []
+        parameter_model, parameter_template_model, content_type_model = (
+            _get_parameter_model_dependencies()
+        )
 
         try:
             part = Part.objects.get(pk=part_id)
@@ -237,12 +267,13 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
         # Parameters — add missing ones (do not overwrite existing values)
         for param in fresh.parameters:
             try:
-                template, _ = PartParameterTemplate.objects.get_or_create(
+                template, _ = parameter_template_model.objects.get_or_create(
                     name=param.name,
                     defaults={"units": param.units},
                 )
-                if not PartParameter.objects.filter(part=part, template=template).exists():
-                    PartParameter.objects.create(part=part, template=template, data=param.value)
+                parameter_kwargs = _parameter_filter_kwargs(part, template, content_type_model)
+                if not parameter_model.objects.filter(**parameter_kwargs).exists():
+                    parameter_model.objects.create(**parameter_kwargs, data=param.value)
                     updated.append(f"parameter:{param.name}")
                 else:
                     skipped.append(f"parameter:{param.name}")

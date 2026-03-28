@@ -188,8 +188,9 @@ _FRESH_DATA = PartData(
 _PT_PART = "part.models.Part"
 _PT_SP = "company.models.SupplierPart"
 _PT_PB = "company.models.SupplierPriceBreak"
-_PT_TMPL = "part.models.PartParameterTemplate"
-_PT_PARAM = "part.models.PartParameter"
+_PT_CT = "django.contrib.contenttypes.models.ContentType"
+_PT_TMPL = "common.models.ParameterTemplate"
+_PT_PARAM = "common.models.Parameter"
 
 
 def _stub_qs_for_sp(mock_sp_cls: MagicMock, sp_instance: MagicMock | None) -> None:
@@ -230,12 +231,14 @@ class TestEnrichPart:
             patch(_PT_PART) as MockPart,
             patch(_PT_SP) as MockSP,
             patch(_PT_PB) as MockPB,
+            patch(_PT_CT) as MockContentType,
             patch(_PT_TMPL) as MockTmpl,
             patch(_PT_PARAM) as MockParam,
             patch.object(plugin, "get_import_data", return_value=fresh_data),
         ):
             MockPart.DoesNotExist = Exception
             MockPart.objects.get.return_value = _part
+            MockContentType.objects.get_for_model.return_value = "part-content-type"
 
             _stub_qs_for_sp(MockSP, _sp)
             _stub_pb_qs(MockPB, existing_pb_quantities or [])

@@ -68,6 +68,58 @@ def _make_part_stubs() -> dict[str, types.ModuleType]:
     return {"part": part_mod, "part.models": models_mod}
 
 
+def _make_common_stubs() -> dict[str, types.ModuleType]:
+    """Return minimal stubs for InvenTree common modules."""
+    common_mod = types.ModuleType("common")
+    models_mod = types.ModuleType("common.models")
+
+    class _QuerySet:
+        def filter(self, **kwargs: object) -> _QuerySet:
+            return self
+
+        def exists(self) -> bool:
+            return False
+
+        def get_for_model(self, model: object) -> object:
+            return object()
+
+    class ParameterTemplate:
+        objects = _QuerySet()
+
+    class Parameter:
+        objects = _QuerySet()
+
+    models_mod.ParameterTemplate = ParameterTemplate  # type: ignore[attr-defined]
+    models_mod.Parameter = Parameter  # type: ignore[attr-defined]
+    common_mod.models = models_mod  # type: ignore[attr-defined]
+
+    return {"common": common_mod, "common.models": models_mod}
+
+
+def _make_django_contenttypes_stubs() -> dict[str, types.ModuleType]:
+    """Return minimal stubs for django.contrib.contenttypes."""
+    django_contrib_mod = types.ModuleType("django.contrib")
+    contenttypes_mod = types.ModuleType("django.contrib.contenttypes")
+    contenttypes_models_mod = types.ModuleType("django.contrib.contenttypes.models")
+
+    class _ContentTypeManager:
+        def get_for_model(self, model: object) -> object:
+            return object()
+
+    class ContentType:
+        objects = _ContentTypeManager()
+
+    contenttypes_models_mod.ContentType = ContentType  # type: ignore[attr-defined]
+    contenttypes_mod.models = contenttypes_models_mod  # type: ignore[attr-defined]
+    django_contrib_mod.contenttypes = contenttypes_mod  # type: ignore[attr-defined]
+
+    return {
+        "django.contrib": django_contrib_mod,
+        "django.contrib.contenttypes": contenttypes_mod,
+        "django.contrib.contenttypes.models": contenttypes_models_mod,
+    }
+
+
 def _make_plugin_stubs() -> dict[str, types.ModuleType]:
     """Return minimal stubs for InvenTree plugin modules."""
     plugin_mod = types.ModuleType("plugin")
@@ -144,6 +196,12 @@ if "plugin" not in sys.modules:
         sys.modules[_mod_name] = _mod
 if "company" not in sys.modules:
     for _mod_name, _mod in _make_company_stubs().items():
+        sys.modules[_mod_name] = _mod
+if "common" not in sys.modules:
+    for _mod_name, _mod in _make_common_stubs().items():
+        sys.modules[_mod_name] = _mod
+if "django.contrib.contenttypes.models" not in sys.modules:
+    for _mod_name, _mod in _make_django_contenttypes_stubs().items():
         sys.modules[_mod_name] = _mod
 if "part" not in sys.modules:
     for _mod_name, _mod in _make_part_stubs().items():
