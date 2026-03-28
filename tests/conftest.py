@@ -80,6 +80,9 @@ def _make_common_stubs() -> dict[str, types.ModuleType]:
         def exists(self) -> bool:
             return False
 
+        def first(self) -> None:
+            return None
+
         def get_for_model(self, model: object) -> object:
             return object()
 

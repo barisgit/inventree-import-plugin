@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from io import BytesIO
 from dataclasses import dataclass
 from typing import Any
 
@@ -10,6 +11,46 @@ from inventree_import_plugin.models import PartData
 __all__ = ["BaseImportPlugin", "SearchResult", "Supplier"]
 
 logger = logging.getLogger("inventree_import_plugin")
+
+
+def _download_and_set_image(part: Any, image_url: str) -> None:
+    """Download *image_url* and save it as the part's image.
+
+    Tries multiple approaches with graceful fallback:
+      1. InvenTree.helpers_model.download_image_from_url (current versions)
+      2. part.set_image_from_url                    (older versions)
+      3. Manual urllib + Django ContentFile         (standalone fallback)
+    """
+    # 1) InvenTree helper
+    try:
+        from InvenTree.helpers_model import download_image_from_url
+        from django.core.files.base import ContentFile
+
+        img = download_image_from_url(image_url)
+        if img is not None:
+            image_format = img.format or "PNG"
+            filename = f"part_{getattr(part, 'pk', 'image')}_image.{image_format.lower()}"
+            buffer = BytesIO()
+            img.save(buffer, format=image_format)
+            part.image.save(filename, ContentFile(buffer.getvalue()), save=True)
+            return
+    except (ImportError, Exception) as exc:
+        logger.debug("download_image_from_url unavailable or failed: %s", exc)
+
+    # 2) Legacy method
+    if hasattr(part, "set_image_from_url"):
+        part.set_image_from_url(image_url)
+        return
+
+    # 3) Manual download + Django ContentFile
+    import urllib.request
+
+    from django.core.files.base import ContentFile
+
+    filename = image_url.rsplit("/", 1)[-1] or "image.jpg"
+    with urllib.request.urlopen(image_url, timeout=15) as resp:
+        data = resp.read()
+    part.image.save(filename, ContentFile(data), save=True)
 
 
 def _get_parameter_model_dependencies() -> tuple[Any, Any, Any | None]:
@@ -133,7 +174,7 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
         )
         if data.image_url and not part.image:
             try:
-                part.set_image_from_url(data.image_url)
+                _download_and_set_image(part, data.image_url)
             except Exception:
                 logger.warning("Failed to download image for part %s", data.sku)
         return part
@@ -175,10 +216,13 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
     # Enrich endpoint (shared by all supplier plugins)
     # ------------------------------------------------------------------
 
-    def _enrich_part(self, part_id: int) -> dict[str, Any]:
+    def _enrich_part(self, part_id: int, *, dry_run: bool = False) -> dict[str, Any]:
         """Fetch fresh supplier data and fill any gaps on an existing part.
 
         Only fills missing data — does not overwrite user-edited fields.
+
+        When *dry_run* is ``True`` the method computes what *would* change
+        without persisting anything, and returns the preview dict.
 
         Returns a dict with keys: ``updated``, ``skipped``, ``errors``.
         """
@@ -228,20 +272,26 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
 
         # Image — only if the part has none
         if fresh.image_url and not part.image:
-            try:
-                part.set_image_from_url(fresh.image_url)
+            if dry_run:
                 updated.append("image")
-            except Exception as exc:
-                logger.warning("Failed to download image for part %s: %s", part_id, exc)
-                errors.append(f"image: {exc}")
+            else:
+                try:
+                    _download_and_set_image(part, fresh.image_url)
+                    updated.append("image")
+                except Exception as exc:
+                    logger.warning("Failed to download image for part %s: %s", part_id, exc)
+                    errors.append(f"image: {exc}")
         else:
             skipped.append("image")
 
         # Datasheet link — stored as part.link; only fill if empty
         if fresh.datasheet_url and not part.link:
-            part.link = fresh.datasheet_url
-            part.save(update_fields=["link"])
-            updated.append("datasheet_link")
+            if dry_run:
+                updated.append("datasheet_link")
+            else:
+                part.link = fresh.datasheet_url
+                part.save(update_fields=["link"])
+                updated.append("datasheet_link")
         else:
             skipped.append("datasheet_link")
 
@@ -251,30 +301,43 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
         )
         for pb in fresh.price_breaks:
             if pb.quantity not in existing_quantities:
-                try:
-                    SupplierPriceBreak.objects.create(
-                        part=supplier_part,
-                        quantity=pb.quantity,
-                        price=pb.price,
-                        price_currency=pb.currency,
-                    )
+                if dry_run:
                     updated.append(f"price_break:{pb.quantity}")
-                except Exception as exc:
-                    errors.append(f"price_break:{pb.quantity}: {exc}")
+                else:
+                    try:
+                        SupplierPriceBreak.objects.create(
+                            part=supplier_part,
+                            quantity=pb.quantity,
+                            price=pb.price,
+                            price_currency=pb.currency,
+                        )
+                        updated.append(f"price_break:{pb.quantity}")
+                    except Exception as exc:
+                        errors.append(f"price_break:{pb.quantity}: {exc}")
             else:
                 skipped.append(f"price_break:{pb.quantity}")
 
         # Parameters — add missing ones (do not overwrite existing values)
         for param in fresh.parameters:
             try:
-                template, _ = parameter_template_model.objects.get_or_create(
-                    name=param.name,
-                    defaults={"units": param.units},
-                )
+                if dry_run:
+                    template = parameter_template_model.objects.filter(name=param.name).first()
+                    if template is None:
+                        updated.append(f"parameter:{param.name}")
+                        continue
+                else:
+                    template, _ = parameter_template_model.objects.get_or_create(
+                        name=param.name,
+                        defaults={"units": param.units},
+                    )
+
                 parameter_kwargs = _parameter_filter_kwargs(part, template, content_type_model)
                 if not parameter_model.objects.filter(**parameter_kwargs).exists():
-                    parameter_model.objects.create(**parameter_kwargs, data=param.value)
-                    updated.append(f"parameter:{param.name}")
+                    if dry_run:
+                        updated.append(f"parameter:{param.name}")
+                    else:
+                        parameter_model.objects.create(**parameter_kwargs, data=param.value)
+                        updated.append(f"parameter:{param.name}")
                 else:
                     skipped.append(f"parameter:{param.name}")
             except Exception as exc:
@@ -294,6 +357,11 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
         class _EnrichView(APIView):  # type: ignore[misc]
             permission_classes = [RolePermission]
             role_required = "part.change"
+
+            def get(inner_self, request: Any, part_id: int) -> Any:  # noqa: N805
+                """Preview what *would* change without persisting."""
+                result = plugin._enrich_part(part_id, dry_run=True)
+                return Response(result)
 
             def post(inner_self, request: Any, part_id: int) -> Any:  # noqa: N805
                 result = plugin._enrich_part(part_id)

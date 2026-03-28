@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from inventree_import_plugin.base import BaseImportPlugin
+from inventree_import_plugin.base import BaseImportPlugin, _download_and_set_image
 from inventree_import_plugin.models import PartData, PartParameter, PriceBreak
 from inventree_import_plugin.mouser_plugin import MouserImportPlugin
 from inventree_import_plugin.lcsc_plugin import LCSCImportPlugin
@@ -214,6 +214,8 @@ def _stub_pb_qs(mock_pb_cls: MagicMock, existing: list[int]) -> None:
 
 
 class TestEnrichPart:
+    _DL_PATCH = "inventree_import_plugin.base._download_and_set_image"
+
     def _run(
         self,
         plugin: MouserImportPlugin,
@@ -223,6 +225,7 @@ class TestEnrichPart:
         fresh_data: PartData | None = _FRESH_DATA,
         existing_pb_quantities: list[int] | None = None,
         param_exists: bool = False,
+        dry_run: bool = False,
     ) -> dict:
         _part = part or _make_part()
         _sp = supplier_part or _make_supplier_part()
@@ -234,6 +237,7 @@ class TestEnrichPart:
             patch(_PT_CT) as MockContentType,
             patch(_PT_TMPL) as MockTmpl,
             patch(_PT_PARAM) as MockParam,
+            patch(self._DL_PATCH) as _mock_dl,
             patch.object(plugin, "get_import_data", return_value=fresh_data),
         ):
             MockPart.DoesNotExist = Exception
@@ -247,7 +251,7 @@ class TestEnrichPart:
             MockTmpl.objects.get_or_create.return_value = (template_mock, True)
             MockParam.objects.filter.return_value.exists.return_value = param_exists
 
-            return plugin._enrich_part(42)
+            return plugin._enrich_part(42, dry_run=dry_run)
 
     def test_part_not_found_returns_error(self, mouser_plugin: MouserImportPlugin) -> None:
         with patch(_PT_PART) as MockPart:
@@ -270,17 +274,55 @@ class TestEnrichPart:
 
     def test_image_updated_when_part_has_no_image(self, mouser_plugin: MouserImportPlugin) -> None:
         part = _make_part(image="")
-        result = self._run(mouser_plugin, part=part)
+        with (
+            patch(_PT_PART) as MockPart,
+            patch(_PT_SP) as MockSP,
+            patch(_PT_PB) as MockPB,
+            patch(_PT_CT) as MockContentType,
+            patch(_PT_TMPL) as MockTmpl,
+            patch(_PT_PARAM) as MockParam,
+            patch(self._DL_PATCH) as mock_dl,
+            patch.object(mouser_plugin, "get_import_data", return_value=_FRESH_DATA),
+        ):
+            MockPart.DoesNotExist = Exception
+            MockPart.objects.get.return_value = part
+            MockContentType.objects.get_for_model.return_value = "ct"
+            _stub_qs_for_sp(MockSP, _make_supplier_part())
+            _stub_pb_qs(MockPB, [])
+            MockTmpl.objects.get_or_create.return_value = (MagicMock(), True)
+            MockParam.objects.filter.return_value.exists.return_value = False
+
+            result = mouser_plugin._enrich_part(42)
+
         assert "image" in result["updated"]
-        part.set_image_from_url.assert_called_once_with(_FRESH_DATA.image_url)
+        mock_dl.assert_called_once_with(part, _FRESH_DATA.image_url)
 
     def test_image_skipped_when_part_already_has_image(
         self, mouser_plugin: MouserImportPlugin
     ) -> None:
         part = _make_part(image="existing.jpg")
-        result = self._run(mouser_plugin, part=part)
+        with (
+            patch(_PT_PART) as MockPart,
+            patch(_PT_SP) as MockSP,
+            patch(_PT_PB) as MockPB,
+            patch(_PT_CT) as MockContentType,
+            patch(_PT_TMPL) as MockTmpl,
+            patch(_PT_PARAM) as MockParam,
+            patch(self._DL_PATCH) as mock_dl,
+            patch.object(mouser_plugin, "get_import_data", return_value=_FRESH_DATA),
+        ):
+            MockPart.DoesNotExist = Exception
+            MockPart.objects.get.return_value = part
+            MockContentType.objects.get_for_model.return_value = "ct"
+            _stub_qs_for_sp(MockSP, _make_supplier_part())
+            _stub_pb_qs(MockPB, [])
+            MockTmpl.objects.get_or_create.return_value = (MagicMock(), True)
+            MockParam.objects.filter.return_value.exists.return_value = False
+
+            result = mouser_plugin._enrich_part(42)
+
         assert "image" in result["skipped"]
-        part.set_image_from_url.assert_not_called()
+        mock_dl.assert_not_called()
 
     def test_datasheet_link_updated_when_empty(self, mouser_plugin: MouserImportPlugin) -> None:
         part = _make_part(link="")
@@ -354,3 +396,170 @@ class TestEnrichPart:
         """LCSC plugin inherits the same enrich logic from BaseImportPlugin."""
         result = self._run(lcsc_plugin)
         assert set(result.keys()) == {"updated", "skipped", "errors"}
+
+
+# ---------------------------------------------------------------------------
+# dry_run (GET preview) tests
+# ---------------------------------------------------------------------------
+
+
+class TestEnrichPreview:
+    """Verify dry_run=True returns preview without persisting."""
+
+    _DL_PATCH = "inventree_import_plugin.base._download_and_set_image"
+
+    def _run_preview(self, plugin, **kwargs):
+        kwargs.setdefault("dry_run", True)
+        # Reuse TestEnrichPart._run with dry_run
+        helper = TestEnrichPart()
+        return helper._run(plugin, **kwargs)
+
+    def test_preview_returns_same_keys(self, mouser_plugin: MouserImportPlugin) -> None:
+        result = self._run_preview(mouser_plugin)
+        assert set(result.keys()) == {"updated", "skipped", "errors"}
+
+    def test_preview_does_not_download_image(self, mouser_plugin: MouserImportPlugin) -> None:
+        part = _make_part(image="")
+        with (
+            patch(_PT_PART) as MockPart,
+            patch(_PT_SP) as MockSP,
+            patch(_PT_PB) as MockPB,
+            patch(_PT_CT) as MockContentType,
+            patch(_PT_TMPL) as MockTmpl,
+            patch(_PT_PARAM) as MockParam,
+            patch(self._DL_PATCH) as mock_dl,
+            patch.object(mouser_plugin, "get_import_data", return_value=_FRESH_DATA),
+        ):
+            MockPart.DoesNotExist = Exception
+            MockPart.objects.get.return_value = part
+            MockContentType.objects.get_for_model.return_value = "ct"
+            _stub_qs_for_sp(MockSP, _make_supplier_part())
+            _stub_pb_qs(MockPB, [])
+            MockTmpl.objects.get_or_create.return_value = (MagicMock(), True)
+            MockParam.objects.filter.return_value.exists.return_value = False
+
+            result = mouser_plugin._enrich_part(42, dry_run=True)
+
+        assert "image" in result["updated"]
+        # Image download must NOT have been called in dry_run mode
+        mock_dl.assert_not_called()
+
+    def test_preview_does_not_save_datasheet(self, mouser_plugin: MouserImportPlugin) -> None:
+        part = _make_part(link="")
+        with (
+            patch(_PT_PART) as MockPart,
+            patch(_PT_SP) as MockSP,
+            patch(_PT_PB) as MockPB,
+            patch(_PT_CT) as MockContentType,
+            patch(_PT_TMPL) as MockTmpl,
+            patch(_PT_PARAM) as MockParam,
+            patch(self._DL_PATCH),
+            patch.object(mouser_plugin, "get_import_data", return_value=_FRESH_DATA),
+        ):
+            MockPart.DoesNotExist = Exception
+            MockPart.objects.get.return_value = part
+            MockContentType.objects.get_for_model.return_value = "ct"
+            _stub_qs_for_sp(MockSP, _make_supplier_part())
+            _stub_pb_qs(MockPB, [])
+            MockTmpl.objects.get_or_create.return_value = (MagicMock(), True)
+            MockParam.objects.filter.return_value.exists.return_value = False
+
+            result = mouser_plugin._enrich_part(42, dry_run=True)
+
+        assert "datasheet_link" in result["updated"]
+        # part.save must NOT have been called in dry_run
+        part.save.assert_not_called()
+
+    def test_preview_does_not_create_price_breaks(self, mouser_plugin: MouserImportPlugin) -> None:
+        with (
+            patch(_PT_PART) as MockPart,
+            patch(_PT_SP) as MockSP,
+            patch(_PT_PB) as MockPB,
+            patch(_PT_CT) as MockContentType,
+            patch(_PT_TMPL) as MockTmpl,
+            patch(_PT_PARAM) as MockParam,
+            patch(self._DL_PATCH),
+            patch.object(mouser_plugin, "get_import_data", return_value=_FRESH_DATA),
+        ):
+            MockPart.DoesNotExist = Exception
+            MockPart.objects.get.return_value = _make_part()
+            MockContentType.objects.get_for_model.return_value = "ct"
+            _stub_qs_for_sp(MockSP, _make_supplier_part())
+            _stub_pb_qs(MockPB, [])
+            MockTmpl.objects.get_or_create.return_value = (MagicMock(), True)
+            MockParam.objects.filter.return_value.exists.return_value = False
+
+            result = mouser_plugin._enrich_part(42, dry_run=True)
+
+        assert "price_break:1" in result["updated"]
+        assert "price_break:10" in result["updated"]
+        MockPB.objects.create.assert_not_called()
+
+    def test_preview_does_not_create_parameters(self, mouser_plugin: MouserImportPlugin) -> None:
+        with (
+            patch(_PT_PART) as MockPart,
+            patch(_PT_SP) as MockSP,
+            patch(_PT_PB) as MockPB,
+            patch(_PT_CT) as MockContentType,
+            patch(_PT_TMPL) as MockTmpl,
+            patch(_PT_PARAM) as MockParam,
+            patch(self._DL_PATCH),
+            patch.object(mouser_plugin, "get_import_data", return_value=_FRESH_DATA),
+        ):
+            MockPart.DoesNotExist = Exception
+            MockPart.objects.get.return_value = _make_part()
+            MockContentType.objects.get_for_model.return_value = "ct"
+            _stub_qs_for_sp(MockSP, _make_supplier_part())
+            _stub_pb_qs(MockPB, [1, 10])
+            MockTmpl.objects.get_or_create.return_value = (MagicMock(), True)
+            MockParam.objects.filter.return_value.exists.return_value = False
+
+            result = mouser_plugin._enrich_part(42, dry_run=True)
+
+        assert "parameter:Voltage" in result["updated"]
+        MockParam.objects.create.assert_not_called()
+        MockTmpl.objects.get_or_create.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _download_and_set_image fallback chain
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadAndSetImage:
+    _FUNC = "inventree_import_plugin.base._download_and_set_image"
+
+    def test_uses_inventree_helper_when_available(self) -> None:
+        part = MagicMock()
+        img = MagicMock()
+        img.format = "PNG"
+        img.save.side_effect = lambda buffer, format: buffer.write(b"image-bytes")
+
+        helper_mod = types.ModuleType("InvenTree.helpers_model")
+        helper_mod.download_image_from_url = MagicMock(return_value=img)  # type: ignore[attr-defined]
+        inventree_mod = sys.modules.get("InvenTree", types.ModuleType("InvenTree"))
+
+        with patch.dict(
+            sys.modules, {"InvenTree": inventree_mod, "InvenTree.helpers_model": helper_mod}
+        ):
+            from inventree_import_plugin.base import _download_and_set_image as fn
+
+            fn(part, "https://example.com/test.jpg")
+
+        part.image.save.assert_called_once()
+        args, kwargs = part.image.save.call_args
+        assert args[0].startswith("part_")
+        assert args[0].endswith(".png")
+        assert kwargs == {"save": True}
+        helper_mod.download_image_from_url.assert_called_once_with("https://example.com/test.jpg")
+
+    def test_falls_back_to_set_image_from_url(self) -> None:
+        part = MagicMock()
+        part.set_image_from_url = MagicMock()
+
+        sys.modules.pop("InvenTree.helpers_model", None)
+        from inventree_import_plugin.base import _download_and_set_image as fn
+
+        fn(part, "https://example.com/test.jpg")
+
+        part.set_image_from_url.assert_called_once_with("https://example.com/test.jpg")
