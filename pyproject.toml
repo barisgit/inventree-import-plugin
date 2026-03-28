@@ -23,6 +23,9 @@ LCSCImportPlugin = "inventree_import_plugin.lcsc_plugin:LCSCImportPlugin"
 where = ["."]
 include = ["inventree_import_plugin*"]
 
+[tool.setuptools.package-data]
+inventree_import_plugin = ["static/**/*.js"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"
