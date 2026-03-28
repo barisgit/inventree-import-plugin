@@ -1,15 +1,13 @@
-
-
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from typing import Any
 
 from inventree_import_plugin import PLUGIN_VERSION
 from inventree_import_plugin.models import PartData
 
-if TYPE_CHECKING:
-    pass
+__all__ = ["BaseImportPlugin", "SearchResult", "Supplier"]
 
 logger = logging.getLogger("inventree_import_plugin")
 
@@ -31,6 +29,27 @@ except ImportError:
     _InvenTreePlugin = _FallbackBase
     _SupplierMixin = _FallbackMixin
     _INVENTREE_AVAILABLE = False
+
+
+try:
+    from plugin.base.supplier.helpers import SearchResult, Supplier
+except ImportError:
+
+    @dataclass
+    class Supplier:  # type: ignore[no-redef]
+        slug: str
+        name: str
+
+    @dataclass
+    class SearchResult:  # type: ignore[no-redef]
+        sku: str
+        name: str
+        exact: bool
+        description: str | None = None
+        price: str | None = None
+        link: str | None = None
+        image_url: str | None = None
+        id: str | None = None
 
 
 class BaseImportPlugin(_SupplierMixin, _InvenTreePlugin):  # type: ignore[misc]

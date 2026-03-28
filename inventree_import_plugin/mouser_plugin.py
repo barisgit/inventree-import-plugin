@@ -6,8 +6,8 @@ import logging
 from typing import Any
 
 from inventree_import_plugin import PLUGIN_VERSION
-from inventree_import_plugin.base import BaseImportPlugin
-from inventree_import_plugin.models import PartData, SearchResult, Supplier
+from inventree_import_plugin.base import BaseImportPlugin, SearchResult, Supplier
+from inventree_import_plugin.models import PartData
 from inventree_import_plugin.suppliers.mouser import fetch_mouser_part, search_mouser
 
 logger = logging.getLogger(__name__)
@@ -48,13 +48,7 @@ class MouserImportPlugin(BaseImportPlugin):
 
     def get_suppliers(self) -> list[Supplier]:
         """Return the list of suppliers provided by this plugin."""
-        return [
-            Supplier(
-                name="Mouser",
-                description="Mouser Electronics",
-                website="https://www.mouser.com",
-            )
-        ]
+        return [Supplier(slug="mouser", name="Mouser")]
 
     def get_search_results(self, supplier_slug: str, term: str) -> list[SearchResult]:
         """Search Mouser for *term* and return a list of candidate parts.
@@ -64,17 +58,18 @@ class MouserImportPlugin(BaseImportPlugin):
             term: Search keyword or part number fragment.
 
         Returns:
-            List of dicts with ``supplier_part_number``, ``manufacturer``,
-            ``manufacturer_part_number``, and ``description`` keys.
+            List of :class:`~plugin.base.supplier.helpers.SearchResult` instances.
         """
         api_key: str = self.get_setting("MOUSER_API_KEY")
         results = search_mouser(api_key, term)
         return [
             SearchResult(
-                supplier_part_number=r.sku,
-                manufacturer=r.manufacturer_name,
-                manufacturer_part_number=r.manufacturer_part_number,
+                sku=r.sku,
+                name=r.name,
+                exact=False,
                 description=r.description,
+                link=r.link,
+                image_url=r.image_url,
             )
             for r in results
         ]

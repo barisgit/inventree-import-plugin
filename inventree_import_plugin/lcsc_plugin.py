@@ -6,8 +6,8 @@ import logging
 from typing import Any
 
 from inventree_import_plugin import PLUGIN_VERSION
-from inventree_import_plugin.base import BaseImportPlugin
-from inventree_import_plugin.models import PartData, SearchResult, Supplier
+from inventree_import_plugin.base import BaseImportPlugin, SearchResult, Supplier
+from inventree_import_plugin.models import PartData
 from inventree_import_plugin.suppliers.lcsc import fetch_lcsc_part, search_lcsc
 
 logger = logging.getLogger(__name__)
@@ -42,34 +42,24 @@ class LCSCImportPlugin(BaseImportPlugin):
 
     def get_suppliers(self) -> list[Supplier]:
         """Return the list of suppliers provided by this plugin."""
-        return [
-            Supplier(
-                name="LCSC",
-                description="LCSC Electronics",
-                website="https://lcsc.com",
-            )
-        ]
+        return [Supplier(slug="lcsc", name="LCSC")]
 
     def get_search_results(self, supplier_slug: str, keyword: str) -> list[SearchResult]:
         """Search LCSC for *keyword* and return a list of candidate parts.
-
-        Each dict contains the fields needed by InvenTree to display search
-        results before the user picks one to import.
 
         Args:
             supplier_slug: Supplier identifier (unused; LCSC only serves one supplier).
             keyword: Search term (part number or description fragment).
 
         Returns:
-            List of dicts with ``supplier_part_number``, ``manufacturer``,
-            ``manufacturer_part_number``, and ``description`` keys.
+            List of :class:`~plugin.base.supplier.helpers.SearchResult` instances.
         """
         raw_results = search_lcsc(keyword)
         return [
             SearchResult(
-                supplier_part_number=r.get("productCode") or "",
-                manufacturer=r.get("brandNameEn") or "",
-                manufacturer_part_number=r.get("productModel") or "",
+                sku=r.get("productCode") or "",
+                name=r.get("productModel") or "",
+                exact=False,
                 description=r.get("productIntroEn") or "",
             )
             for r in raw_results

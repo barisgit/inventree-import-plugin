@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
+from inventree_import_plugin.base import SearchResult
 from inventree_import_plugin.lcsc_plugin import LCSCImportPlugin
 from inventree_import_plugin.models import PartData, PriceBreak
 
@@ -24,10 +25,10 @@ class TestGetSuppliers:
     def test_returns_lcsc_entry(self, plugin: LCSCImportPlugin) -> None:
         suppliers = plugin.get_suppliers()
         assert len(suppliers) == 1
-        assert suppliers[0]["name"] == "LCSC"
+        assert suppliers[0].name == "LCSC"
 
-    def test_entry_has_website(self, plugin: LCSCImportPlugin) -> None:
-        assert "website" in plugin.get_suppliers()[0]
+    def test_entry_has_slug(self, plugin: LCSCImportPlugin) -> None:
+        assert plugin.get_suppliers()[0].slug == "lcsc"
 
 
 # ---------------------------------------------------------------------------
@@ -55,19 +56,18 @@ class TestGetSearchResults:
         with patch("inventree_import_plugin.lcsc_plugin.search_lcsc", return_value=self._raw):
             results = plugin.get_search_results("lcsc", "LM358")
 
-        assert results[0] == {
-            "supplier_part_number": "C12345",
-            "manufacturer": "TI",
-            "manufacturer_part_number": "LM358",
-            "description": "Dual op-amp",
-        }
+        assert isinstance(results[0], SearchResult)
+        assert results[0].sku == "C12345"
+        assert results[0].name == "LM358"
+        assert results[0].description == "Dual op-amp"
+        assert results[0].exact is False
 
     def test_none_fields_coerced_to_empty_string(self, plugin: LCSCImportPlugin) -> None:
         with patch("inventree_import_plugin.lcsc_plugin.search_lcsc", return_value=self._raw):
             results = plugin.get_search_results("lcsc", "anything")
 
-        assert results[1]["manufacturer_part_number"] == ""
-        assert results[1]["description"] == ""
+        assert results[1].name == ""
+        assert results[1].description == ""
 
     def test_returns_all_results(self, plugin: LCSCImportPlugin) -> None:
         with patch("inventree_import_plugin.lcsc_plugin.search_lcsc", return_value=self._raw):
