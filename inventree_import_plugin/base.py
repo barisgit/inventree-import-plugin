@@ -61,9 +61,9 @@ class BaseImportPlugin(_SupplierMixin, _InvenTreePlugin):  # type: ignore[misc]
     def get_parameters(self, data: PartData) -> list[Any]:
         if not _INVENTREE_AVAILABLE:
             return [(p.name, p.value) for p in data.parameters]
-        from plugin.base.supplier import supplier as supplier_types
+        from plugin.base.supplier.helpers import ImportParameter
 
-        return [supplier_types.ImportParameter(name=p.name, value=p.value) for p in data.parameters]
+        return [ImportParameter(name=p.name, value=p.value) for p in data.parameters]
 
     def import_part(
         self,
