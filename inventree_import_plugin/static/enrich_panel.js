@@ -12,15 +12,24 @@
  *     .plugin_slug      - The plugin's registered slug
  *     .supplier_name    - Human-readable supplier name ('Mouser' or 'LCSC')
  */
+const PANEL_ID = 'inventree-enrich-panel';
+
 export function renderEnrichPanel(target, data) {
     if (!(target instanceof HTMLElement) || !data || data.model !== 'part') {
         return;
+    }
+
+    // Idempotent: remove any previously rendered panel to avoid duplicates.
+    const existing = target.querySelector(`#${PANEL_ID}`);
+    if (existing) {
+        existing.remove();
     }
 
     const { plugin_slug: pluginSlug, supplier_name: supplierName } = data.context ?? {};
     const partId = data.id;
 
     const container = document.createElement('div');
+    container.id = PANEL_ID;
     container.style.cssText = 'padding: 12px;';
 
     const button = document.createElement('button');

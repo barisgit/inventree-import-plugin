@@ -68,9 +68,7 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
 
         for result in results:
             supplier_part = (
-                SupplierPart.objects.filter(
-                    supplier=self.supplier_company, SKU=result.sku
-                )
+                SupplierPart.objects.filter(supplier=self.supplier_company, SKU=result.sku)
                 .select_related("part")
                 .first()
             )
@@ -219,9 +217,7 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
 
         # Price breaks — add quantities not already present
         existing_quantities: set[int] = set(
-            SupplierPriceBreak.objects.filter(part=supplier_part).values_list(
-                "quantity", flat=True
-            )
+            SupplierPriceBreak.objects.filter(part=supplier_part).values_list("quantity", flat=True)
         )
         for pb in fresh.price_breaks:
             if pb.quantity not in existing_quantities:
@@ -255,8 +251,8 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
 
         return {"updated": updated, "skipped": skipped, "errors": errors}
 
-    def plugin_urlpatterns(self) -> list[Any]:
-        """Return URL patterns for this plugin, including the enrich endpoint."""
+    def setup_urls(self) -> None:
+        """Register URL patterns for this plugin, including the enrich endpoint."""
         from django.urls import path
         from rest_framework.response import Response
         from rest_framework.views import APIView
@@ -268,4 +264,4 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
                 result = plugin._enrich_part(part_id)
                 return Response(result)
 
-        return [path("enrich/<int:part_id>/", _EnrichView.as_view(), name="enrich")]
+        self.urls = [path("enrich/<int:part_id>/", _EnrichView.as_view(), name="enrich")]

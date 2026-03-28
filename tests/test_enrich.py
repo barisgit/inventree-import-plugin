@@ -1,14 +1,52 @@
-"""Tests for BaseImportPlugin._enrich_part() and get_ui_panels()."""
+"""Tests for BaseImportPlugin._enrich_part(), setup_urls(), and get_ui_panels()."""
 
 from __future__ import annotations
 
+import sys
+import types
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from inventree_import_plugin.base import BaseImportPlugin
 from inventree_import_plugin.models import PartData, PartParameter, PriceBreak
 from inventree_import_plugin.mouser_plugin import MouserImportPlugin
 from inventree_import_plugin.lcsc_plugin import LCSCImportPlugin
+
+
+@pytest.fixture(autouse=True)
+def _mock_django():
+    """Provide minimal Django/DRF stubs when the real packages are absent."""
+    if "django" in sys.modules:
+        return
+    django = types.ModuleType("django")
+    django.urls = types.ModuleType("django.urls")  # type: ignore[attr-defined]
+
+    class _FakeUrlPattern:
+        def __init__(self, pattern, name):
+            self.pattern = pattern
+            self.name = name
+
+    def _path(route, view, *, name=None):
+        return _FakeUrlPattern(route, name)
+
+    django.urls.path = _path  # type: ignore[attr-defined]
+
+    rest_framework = types.ModuleType("rest_framework")
+    rf_views = types.ModuleType("rest_framework.views")
+    rf_views.APIView = type(
+        "APIView", (), {"as_view": classmethod(lambda cls: lambda r, **kw: None)}
+    )  # type: ignore[attr-defined]
+    rest_framework.views = rf_views  # type: ignore[attr-defined]
+    rf_response = types.ModuleType("rest_framework.response")
+    rf_response.Response = type("Response", (), {})  # type: ignore[attr-defined]
+    rest_framework.response = rf_response  # type: ignore[attr-defined]
+
+    sys.modules["django"] = django
+    sys.modules["django.urls"] = django.urls  # type: ignore[attr-defined]
+    sys.modules["rest_framework"] = rest_framework
+    sys.modules["rest_framework.views"] = rest_framework.views  # type: ignore[attr-defined]
+    sys.modules["rest_framework.response"] = rest_framework.response  # type: ignore[attr-defined]
 
 
 @pytest.fixture()
@@ -27,7 +65,9 @@ def lcsc_plugin() -> LCSCImportPlugin:
 
 
 class TestGetUiPanels:
-    def test_mouser_returns_empty_for_non_part_model(self, mouser_plugin: MouserImportPlugin) -> None:
+    def test_mouser_returns_empty_for_non_part_model(
+        self, mouser_plugin: MouserImportPlugin
+    ) -> None:
         result = mouser_plugin.get_ui_panels(None, {"target_model": "stockitem"})
         assert result == []
 
@@ -54,6 +94,37 @@ class TestGetUiPanels:
     def test_none_context_returns_empty(self, mouser_plugin: MouserImportPlugin) -> None:
         result = mouser_plugin.get_ui_panels(None, None)
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# setup_urls
+# ---------------------------------------------------------------------------
+
+
+class TestSetupUrls:
+    def test_setup_urls_populates_urls_list(self, mouser_plugin: MouserImportPlugin) -> None:
+        mouser_plugin.setup_urls()
+        assert hasattr(mouser_plugin, "urls")
+        assert len(mouser_plugin.urls) == 1
+        assert mouser_plugin.urls[0].name == "enrich"
+
+    def test_setup_urls_idempotent(self, mouser_plugin: MouserImportPlugin) -> None:
+        mouser_plugin.setup_urls()
+        first_count = len(mouser_plugin.urls)
+        mouser_plugin.setup_urls()
+        assert len(mouser_plugin.urls) == first_count
+
+    def test_setup_urls_pattern_contains_enrich(self, mouser_plugin: MouserImportPlugin) -> None:
+        mouser_plugin.setup_urls()
+        pattern = mouser_plugin.urls[0]
+        route = str(pattern.pattern)
+        assert "enrich" in route
+        assert "part_id" in route
+
+    def test_lcsc_setup_urls(self, lcsc_plugin: LCSCImportPlugin) -> None:
+        lcsc_plugin.setup_urls()
+        assert len(lcsc_plugin.urls) == 1
+        assert lcsc_plugin.urls[0].name == "enrich"
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +244,9 @@ class TestEnrichPart:
         assert "image" in result["updated"]
         part.set_image_from_url.assert_called_once_with(_FRESH_DATA.image_url)
 
-    def test_image_skipped_when_part_already_has_image(self, mouser_plugin: MouserImportPlugin) -> None:
+    def test_image_skipped_when_part_already_has_image(
+        self, mouser_plugin: MouserImportPlugin
+    ) -> None:
         part = _make_part(image="existing.jpg")
         result = self._run(mouser_plugin, part=part)
         assert "image" in result["skipped"]
@@ -185,7 +258,9 @@ class TestEnrichPart:
         assert "datasheet_link" in result["updated"]
         assert part.link == _FRESH_DATA.datasheet_url
 
-    def test_datasheet_link_skipped_when_already_set(self, mouser_plugin: MouserImportPlugin) -> None:
+    def test_datasheet_link_skipped_when_already_set(
+        self, mouser_plugin: MouserImportPlugin
+    ) -> None:
         part = _make_part(link="https://existing.com/ds.pdf")
         result = self._run(mouser_plugin, part=part)
         assert "datasheet_link" in result["skipped"]
@@ -195,7 +270,9 @@ class TestEnrichPart:
         assert "price_break:1" in result["updated"]
         assert "price_break:10" in result["updated"]
 
-    def test_price_breaks_skipped_for_existing_quantities(self, mouser_plugin: MouserImportPlugin) -> None:
+    def test_price_breaks_skipped_for_existing_quantities(
+        self, mouser_plugin: MouserImportPlugin
+    ) -> None:
         result = self._run(mouser_plugin, existing_pb_quantities=[1, 10])
         assert "price_break:1" in result["skipped"]
         assert "price_break:10" in result["skipped"]
@@ -204,7 +281,9 @@ class TestEnrichPart:
         result = self._run(mouser_plugin, param_exists=False)
         assert "parameter:Voltage" in result["updated"]
 
-    def test_parameter_skipped_when_already_present(self, mouser_plugin: MouserImportPlugin) -> None:
+    def test_parameter_skipped_when_already_present(
+        self, mouser_plugin: MouserImportPlugin
+    ) -> None:
         result = self._run(mouser_plugin, param_exists=True)
         assert "parameter:Voltage" in result["skipped"]
 
@@ -212,7 +291,9 @@ class TestEnrichPart:
         with (
             patch(_PT_PART) as MockPart,
             patch(_PT_SP) as MockSP,
-            patch.object(mouser_plugin, "get_import_data", side_effect=RuntimeError("network error")),
+            patch.object(
+                mouser_plugin, "get_import_data", side_effect=RuntimeError("network error")
+            ),
         ):
             MockPart.DoesNotExist = Exception
             MockPart.objects.get.return_value = _make_part()
@@ -237,7 +318,9 @@ class TestEnrichPart:
         result = self._run(mouser_plugin)
         assert set(result.keys()) == {"updated", "skipped", "errors"}
 
-    def test_lcsc_plugin_enrich_returns_structured_result(self, lcsc_plugin: LCSCImportPlugin) -> None:
+    def test_lcsc_plugin_enrich_returns_structured_result(
+        self, lcsc_plugin: LCSCImportPlugin
+    ) -> None:
         """LCSC plugin inherits the same enrich logic from BaseImportPlugin."""
         result = self._run(lcsc_plugin)
         assert set(result.keys()) == {"updated", "skipped", "errors"}
