@@ -34,9 +34,11 @@ def _mock_django():
 
     rest_framework = types.ModuleType("rest_framework")
     rf_views = types.ModuleType("rest_framework.views")
-    rf_views.APIView = type(
-        "APIView", (), {"as_view": classmethod(lambda cls: lambda r, **kw: None)}
-    )  # type: ignore[attr-defined]
+    setattr(
+        rf_views,
+        "APIView",
+        type("APIView", (), {"as_view": classmethod(lambda cls: lambda r, **kw: None)}),
+    )
     rest_framework.views = rf_views  # type: ignore[attr-defined]
     rf_response = types.ModuleType("rest_framework.response")
     rf_response.Response = type("Response", (), {})  # type: ignore[attr-defined]
@@ -102,29 +104,26 @@ class TestGetUiPanels:
 
 
 class TestSetupUrls:
-    def test_setup_urls_populates_urls_list(self, mouser_plugin: MouserImportPlugin) -> None:
-        mouser_plugin.setup_urls()
-        assert hasattr(mouser_plugin, "urls")
-        assert len(mouser_plugin.urls) == 1
-        assert mouser_plugin.urls[0].name == "enrich"
+    def test_setup_urls_returns_urls_list(self, mouser_plugin: MouserImportPlugin) -> None:
+        urls = mouser_plugin.setup_urls()
+        assert len(urls) == 1
+        assert urls[0].name == "enrich"
 
     def test_setup_urls_idempotent(self, mouser_plugin: MouserImportPlugin) -> None:
-        mouser_plugin.setup_urls()
-        first_count = len(mouser_plugin.urls)
-        mouser_plugin.setup_urls()
-        assert len(mouser_plugin.urls) == first_count
+        first_urls = mouser_plugin.setup_urls()
+        second_urls = mouser_plugin.setup_urls()
+        assert len(first_urls) == len(second_urls)
 
     def test_setup_urls_pattern_contains_enrich(self, mouser_plugin: MouserImportPlugin) -> None:
-        mouser_plugin.setup_urls()
-        pattern = mouser_plugin.urls[0]
+        pattern = mouser_plugin.setup_urls()[0]
         route = str(pattern.pattern)
         assert "enrich" in route
         assert "part_id" in route
 
     def test_lcsc_setup_urls(self, lcsc_plugin: LCSCImportPlugin) -> None:
-        lcsc_plugin.setup_urls()
-        assert len(lcsc_plugin.urls) == 1
-        assert lcsc_plugin.urls[0].name == "enrich"
+        urls = lcsc_plugin.setup_urls()
+        assert len(urls) == 1
+        assert urls[0].name == "enrich"
 
 
 # ---------------------------------------------------------------------------
