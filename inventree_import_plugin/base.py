@@ -253,6 +253,7 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
 
     def setup_urls(self) -> list[Any]:
         """Return URL patterns for this plugin, including the enrich endpoint."""
+        from InvenTree.permissions import RolePermission
         from django.urls import path
         from rest_framework.response import Response
         from rest_framework.views import APIView
@@ -260,6 +261,9 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
         plugin = self
 
         class _EnrichView(APIView):  # type: ignore[misc]
+            permission_classes = [RolePermission]
+            role_required = "part.change"
+
             def post(inner_self, request: Any, part_id: int) -> Any:  # noqa: N805
                 result = plugin._enrich_part(part_id)
                 return Response(result)

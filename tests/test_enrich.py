@@ -23,29 +23,49 @@ def _mock_django():
     django.urls = types.ModuleType("django.urls")  # type: ignore[attr-defined]
 
     class _FakeUrlPattern:
-        def __init__(self, pattern, name):
+        def __init__(self, pattern, callback, name):
             self.pattern = pattern
+            self.callback = callback
             self.name = name
 
     def _path(route, view, *, name=None):
-        return _FakeUrlPattern(route, name)
+        return _FakeUrlPattern(route, view, name)
 
     django.urls.path = _path  # type: ignore[attr-defined]
 
     rest_framework = types.ModuleType("rest_framework")
     rf_views = types.ModuleType("rest_framework.views")
+
+    def _as_view(cls):
+        def _view(request, **kwargs):
+            return None
+
+        _view.view_class = cls  # type: ignore[attr-defined]
+        return _view
+
     setattr(
         rf_views,
         "APIView",
-        type("APIView", (), {"as_view": classmethod(lambda cls: lambda r, **kw: None)}),
+        type(
+            "APIView",
+            (),
+            {"as_view": classmethod(_as_view)},
+        ),
     )
     rest_framework.views = rf_views  # type: ignore[attr-defined]
     rf_response = types.ModuleType("rest_framework.response")
     rf_response.Response = type("Response", (), {})  # type: ignore[attr-defined]
     rest_framework.response = rf_response  # type: ignore[attr-defined]
 
+    inventree = types.ModuleType("InvenTree")
+    inventree_permissions = types.ModuleType("InvenTree.permissions")
+    setattr(inventree_permissions, "RolePermission", type("RolePermission", (), {}))
+    setattr(inventree, "permissions", inventree_permissions)
+
     sys.modules["django"] = django
     sys.modules["django.urls"] = django.urls  # type: ignore[attr-defined]
+    sys.modules["InvenTree"] = inventree
+    sys.modules["InvenTree.permissions"] = inventree_permissions
     sys.modules["rest_framework"] = rest_framework
     sys.modules["rest_framework.views"] = rest_framework.views  # type: ignore[attr-defined]
     sys.modules["rest_framework.response"] = rest_framework.response  # type: ignore[attr-defined]
@@ -124,6 +144,14 @@ class TestSetupUrls:
         urls = lcsc_plugin.setup_urls()
         assert len(urls) == 1
         assert urls[0].name == "enrich"
+
+    def test_setup_urls_uses_part_change_role(self, mouser_plugin: MouserImportPlugin) -> None:
+        view = mouser_plugin.setup_urls()[0]
+        callback = getattr(view, "callback", None)
+        view_class = getattr(callback, "view_class", None)
+
+        assert view_class is not None
+        assert getattr(view_class, "role_required", None) == "part.change"
 
 
 # ---------------------------------------------------------------------------
