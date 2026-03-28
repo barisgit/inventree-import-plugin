@@ -43,6 +43,24 @@ class MouserImportPlugin(BaseImportPlugin):
     }
 
     # ------------------------------------------------------------------
+    # UserInterfaceMixin interface
+    # ------------------------------------------------------------------
+
+    def get_ui_panels(self, request: Any, context: dict[str, Any] | None = None, **kwargs: Any) -> list[dict[str, Any]]:
+        """Return a Part-detail panel for enriching from Mouser."""
+        if (context or {}).get("target_model") != "part":
+            return []
+        return [
+            {
+                "key": "mouser-enrich",
+                "title": "Enrich from Mouser",
+                "icon": "ti:refresh:outline",
+                "source": self.plugin_static_file("enrich_panel.js:renderEnrichPanel"),
+                "context": {"plugin_slug": self.SLUG, "supplier_name": "Mouser"},
+            }
+        ]
+
+    # ------------------------------------------------------------------
     # SupplierMixin interface
     # ------------------------------------------------------------------
 

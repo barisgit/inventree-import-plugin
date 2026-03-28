@@ -25,10 +25,47 @@ def _make_company_stubs() -> dict[str, types.ModuleType]:
     class SupplierPart:
         objects = _QuerySet()
 
+    class SupplierPriceBreak:
+        objects = _QuerySet()
+
     models_mod.SupplierPart = SupplierPart  # type: ignore[attr-defined]
+    models_mod.SupplierPriceBreak = SupplierPriceBreak  # type: ignore[attr-defined]
     company_mod.models = models_mod  # type: ignore[attr-defined]
 
     return {"company": company_mod, "company.models": models_mod}
+
+
+def _make_part_stubs() -> dict[str, types.ModuleType]:
+    """Return minimal stubs for InvenTree part modules."""
+    part_mod = types.ModuleType("part")
+    models_mod = types.ModuleType("part.models")
+
+    class _DoesNotExist(Exception):
+        pass
+
+    class _QuerySet:
+        def filter(self, **kwargs: object) -> _QuerySet:
+            return self
+
+        def exists(self) -> bool:
+            return False
+
+    class Part:
+        DoesNotExist = _DoesNotExist
+        objects = _QuerySet()
+
+    class PartParameterTemplate:
+        objects = _QuerySet()
+
+    class PartParameter:
+        objects = _QuerySet()
+
+    models_mod.Part = Part  # type: ignore[attr-defined]
+    models_mod.PartParameterTemplate = PartParameterTemplate  # type: ignore[attr-defined]
+    models_mod.PartParameter = PartParameter  # type: ignore[attr-defined]
+    part_mod.models = models_mod  # type: ignore[attr-defined]
+
+    return {"part": part_mod, "part.models": models_mod}
 
 
 def _make_plugin_stubs() -> dict[str, types.ModuleType]:
@@ -75,8 +112,16 @@ def _make_plugin_stubs() -> dict[str, types.ModuleType]:
         id: str | None = None
         existing_part: object = None
 
+    class UrlsMixin:
+        """Minimal stub — satisfies UrlsMixin import in base.py."""
+
+    class UserInterfaceMixin:
+        """Minimal stub — satisfies UserInterfaceMixin import in base.py."""
+
     mixins_mod.SettingsMixin = SettingsMixin  # type: ignore[attr-defined]
     mixins_mod.SupplierMixin = SupplierMixin  # type: ignore[attr-defined]
+    mixins_mod.UrlsMixin = UrlsMixin  # type: ignore[attr-defined]
+    mixins_mod.UserInterfaceMixin = UserInterfaceMixin  # type: ignore[attr-defined]
     plugin_mod.InvenTreePlugin = InvenTreePlugin  # type: ignore[attr-defined]
     plugin_mod.mixins = mixins_mod  # type: ignore[attr-defined]
     plugin_mod.base = base_mod  # type: ignore[attr-defined]
@@ -99,4 +144,7 @@ if "plugin" not in sys.modules:
         sys.modules[_mod_name] = _mod
 if "company" not in sys.modules:
     for _mod_name, _mod in _make_company_stubs().items():
+        sys.modules[_mod_name] = _mod
+if "part" not in sys.modules:
+    for _mod_name, _mod in _make_part_stubs().items():
         sys.modules[_mod_name] = _mod

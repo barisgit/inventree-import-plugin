@@ -23,11 +23,15 @@ class _FallbackMixin:
 try:
     from plugin import InvenTreePlugin as _InvenTreePlugin
     from plugin.mixins import SupplierMixin as _SupplierMixin
+    from plugin.mixins import UrlsMixin as _UrlsMixin
+    from plugin.mixins import UserInterfaceMixin as _UserInterfaceMixin
 
     _INVENTREE_AVAILABLE = True
 except ImportError:
     _InvenTreePlugin = _FallbackBase
     _SupplierMixin = _FallbackMixin
+    _UrlsMixin = _FallbackMixin
+    _UserInterfaceMixin = _FallbackMixin
     _INVENTREE_AVAILABLE = False
 
 
@@ -53,7 +57,7 @@ except ImportError:
         existing_part: Any | None = None
 
 
-class BaseImportPlugin(_SupplierMixin, _InvenTreePlugin):  # type: ignore[misc]
+class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTreePlugin):  # type: ignore[misc]
     VERSION = PLUGIN_VERSION
 
     def _annotate_existing_parts(self, results: list[SearchResult]) -> None:
@@ -141,3 +145,127 @@ class BaseImportPlugin(_SupplierMixin, _InvenTreePlugin):  # type: ignore[misc]
             defaults={"manufacturer_part": manufacturer_part, "link": data.link},
         )
         return supplier_part
+
+    # ------------------------------------------------------------------
+    # Enrich endpoint (shared by all supplier plugins)
+    # ------------------------------------------------------------------
+
+    def _enrich_part(self, part_id: int) -> dict[str, Any]:
+        """Fetch fresh supplier data and fill any gaps on an existing part.
+
+        Only fills missing data — does not overwrite user-edited fields.
+
+        Returns a dict with keys: ``updated``, ``skipped``, ``errors``.
+        """
+        from company.models import SupplierPart, SupplierPriceBreak
+        from part.models import Part, PartParameter, PartParameterTemplate
+
+        updated: list[str] = []
+        skipped: list[str] = []
+        errors: list[str] = []
+
+        try:
+            part = Part.objects.get(pk=part_id)
+        except Part.DoesNotExist:
+            return {"updated": [], "skipped": [], "errors": [f"Part {part_id} not found"]}
+
+        supplier_part = (
+            SupplierPart.objects.filter(part=part, supplier=self.supplier_company)
+            .select_related("part")
+            .first()
+        )
+        if supplier_part is None:
+            return {
+                "updated": [],
+                "skipped": [],
+                "errors": ["No supplier part found for this supplier"],
+            }
+
+        suppliers = self.get_suppliers()
+        if not suppliers:
+            return {"updated": [], "skipped": [], "errors": ["No suppliers configured"]}
+
+        try:
+            fresh = self.get_import_data(suppliers[0].slug, supplier_part.SKU)
+        except Exception as exc:
+            logger.exception("Failed to fetch supplier data for SKU %s", supplier_part.SKU)
+            return {"updated": [], "skipped": [], "errors": [str(exc)]}
+
+        if fresh is None:
+            return {
+                "updated": [],
+                "skipped": [],
+                "errors": [f"No data returned for SKU {supplier_part.SKU}"],
+            }
+
+        # Image — only if the part has none
+        if fresh.image_url and not part.image:
+            try:
+                part.set_image_from_url(fresh.image_url)
+                updated.append("image")
+            except Exception as exc:
+                logger.warning("Failed to download image for part %s: %s", part_id, exc)
+                errors.append(f"image: {exc}")
+        else:
+            skipped.append("image")
+
+        # Datasheet link — stored as part.link; only fill if empty
+        if fresh.datasheet_url and not part.link:
+            part.link = fresh.datasheet_url
+            part.save(update_fields=["link"])
+            updated.append("datasheet_link")
+        else:
+            skipped.append("datasheet_link")
+
+        # Price breaks — add quantities not already present
+        existing_quantities: set[int] = set(
+            SupplierPriceBreak.objects.filter(part=supplier_part).values_list(
+                "quantity", flat=True
+            )
+        )
+        for pb in fresh.price_breaks:
+            if pb.quantity not in existing_quantities:
+                try:
+                    SupplierPriceBreak.objects.create(
+                        part=supplier_part,
+                        quantity=pb.quantity,
+                        price=pb.price,
+                        price_currency=pb.currency,
+                    )
+                    updated.append(f"price_break:{pb.quantity}")
+                except Exception as exc:
+                    errors.append(f"price_break:{pb.quantity}: {exc}")
+            else:
+                skipped.append(f"price_break:{pb.quantity}")
+
+        # Parameters — add missing ones (do not overwrite existing values)
+        for param in fresh.parameters:
+            try:
+                template, _ = PartParameterTemplate.objects.get_or_create(
+                    name=param.name,
+                    defaults={"units": param.units},
+                )
+                if not PartParameter.objects.filter(part=part, template=template).exists():
+                    PartParameter.objects.create(part=part, template=template, data=param.value)
+                    updated.append(f"parameter:{param.name}")
+                else:
+                    skipped.append(f"parameter:{param.name}")
+            except Exception as exc:
+                errors.append(f"parameter:{param.name}: {exc}")
+
+        return {"updated": updated, "skipped": skipped, "errors": errors}
+
+    def plugin_urlpatterns(self) -> list[Any]:
+        """Return URL patterns for this plugin, including the enrich endpoint."""
+        from django.urls import path
+        from rest_framework.response import Response
+        from rest_framework.views import APIView
+
+        plugin = self
+
+        class _EnrichView(APIView):  # type: ignore[misc]
+            def post(inner_self, request: Any, part_id: int) -> Any:  # noqa: N805
+                result = plugin._enrich_part(part_id)
+                return Response(result)
+
+        return [path("enrich/<int:part_id>/", _EnrichView.as_view(), name="enrich")]
