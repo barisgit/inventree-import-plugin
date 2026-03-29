@@ -148,10 +148,11 @@ class TestSetupUrls:
 # ---------------------------------------------------------------------------
 
 
-def _make_part(*, image: str = "", link: str = "") -> MagicMock:
+def _make_part(*, image: str = "", link: str = "", description: str = "") -> MagicMock:
     part = MagicMock()
     part.image = image
     part.link = link
+    part.description = description
     return part
 
 
@@ -851,6 +852,7 @@ class TestEnrichPartForProviderDiff:
             "datasheet",
             "price_breaks",
             "parameters",
+            "part_fields",
             "supplier_part",
         }
 
@@ -1104,3 +1106,640 @@ class TestSupplierPartDefaults:
         data = PartData(sku="C1", name="X", description="", extra_data={"stock": "many"})
         defaults = supplier_part_defaults(data)
         assert "available" not in defaults
+
+
+# ---------------------------------------------------------------------------
+# Part description/link filling from supplier data
+# ---------------------------------------------------------------------------
+
+
+class TestPartFieldFillingBaseEnrich:
+    """Part description/link filled from supplier data when empty (base._enrich_part)."""
+
+    _DL_PATCH = "inventree_import_plugin.base._download_and_set_image"
+
+    def _run(self, plugin, *, part=None, fresh_data=None, dry_run=False):
+        _part = part or _make_part()
+        _sp = _make_supplier_part()
+        _fresh = fresh_data or _FRESH_DATA
+
+        with (
+            patch(_PT_PART) as MockPart,
+            patch(_PT_SP) as MockSP,
+            patch(_PT_PB) as MockPB,
+            patch(_PT_CT) as MockContentType,
+            patch(_PT_TMPL) as MockTmpl,
+            patch(_PT_PARAM) as MockParam,
+            patch(_PT_ATTACH) as MockAttach,
+            patch(self._DL_PATCH),
+            patch.object(plugin, "get_import_data", return_value=_fresh),
+        ):
+            MockPart.DoesNotExist = Exception
+            MockPart.objects.get.return_value = _part
+            MockContentType.objects.get_for_model.return_value = "part-content-type"
+            _stub_qs_for_sp(MockSP, _sp)
+            _stub_pb_qs(MockPB, [])
+            MockTmpl.objects.get_or_create.return_value = (MagicMock(), True)
+            MockParam.objects.filter.return_value.exists.return_value = False
+            _stub_attachment_for_base(MockAttach, has_datasheet=True)
+
+            return plugin._enrich_part(42, dry_run=dry_run)
+
+    def test_description_filled_when_empty(self, mouser_plugin: MouserImportPlugin) -> None:
+        part = _make_part(description="", link="https://already.set")
+        result = self._run(mouser_plugin, part=part)
+        assert "part:description" in result["updated"]
+        assert part.description == _FRESH_DATA.description
+
+    def test_link_filled_when_empty(self, mouser_plugin: MouserImportPlugin) -> None:
+        part = _make_part(description="Already set", link="")
+        result = self._run(mouser_plugin, part=part)
+        assert "part:link" in result["updated"]
+        assert part.link == _FRESH_DATA.link
+
+    def test_both_filled_when_empty(self, mouser_plugin: MouserImportPlugin) -> None:
+        part = _make_part(description="", link="")
+        result = self._run(mouser_plugin, part=part)
+        assert "part:description" in result["updated"]
+        assert "part:link" in result["updated"]
+        assert part.description == _FRESH_DATA.description
+        assert part.link == _FRESH_DATA.link
+        part.save.assert_called_once()
+
+    def test_not_overwritten_when_already_set(self, mouser_plugin: MouserImportPlugin) -> None:
+        part = _make_part(description="Keep this", link="https://keep.this")
+        result = self._run(mouser_plugin, part=part)
+        assert "part:description" not in result["updated"]
+        assert "part:link" not in result["updated"]
+        assert part.description == "Keep this"
+        assert part.link == "https://keep.this"
+
+    def test_preview_reports_without_saving(self, mouser_plugin: MouserImportPlugin) -> None:
+        part = _make_part(description="", link="")
+        result = self._run(mouser_plugin, part=part, dry_run=True)
+        assert "part:description" in result["updated"]
+        assert "part:link" in result["updated"]
+        part.save.assert_not_called()
+
+
+class TestPartFieldFillingSvcEnrich:
+    """Part description/link filled from supplier data when empty (enrich_part_for_provider)."""
+
+    def _run(self, *, part=None, fresh_data=None, dry_run=True):
+        from inventree_import_plugin.services.enrich import enrich_part_for_provider
+
+        plugin = _MockCorePlugin()
+        _part = part or _make_part()
+        _sp = _make_supplier_part()
+        _fresh = fresh_data or _FRESH_DATA
+
+        with (
+            patch(_SVC_PART) as MockPart,
+            patch(_SVC_SP) as MockSP,
+            patch(_SVC_PB) as MockPB,
+            patch(_SVC_CT) as MockContentType,
+            patch(_SVC_TMPL) as MockTmpl,
+            patch(_SVC_PARAM) as MockParam,
+            patch(_SVC_DL),
+            patch(_SVC_ATTACH) as MockAttach,
+            patch.object(plugin, "get_import_data", return_value=_fresh),
+        ):
+            MockPart.DoesNotExist = Exception
+            MockPart.objects.get.return_value = _part
+            MockContentType.objects.get_for_model.return_value = "part-content-type"
+            _svc_stub_qs_for_sp(MockSP, _sp)
+            _svc_stub_pb_qs(MockPB, [])
+            MockTmpl.objects.get_or_create.return_value = (MagicMock(), True)
+            MockParam.objects.filter.return_value.exists.return_value = False
+            _stub_attachment(MockAttach, has_datasheet=True)
+
+            return enrich_part_for_provider(plugin, "test-provider", 42, dry_run=dry_run)
+
+    def test_description_filled_on_apply(self) -> None:
+        part = _make_part(description="", link="https://already.set")
+        result = self._run(part=part, dry_run=False)
+        assert "part:description" in result["updated"]
+        assert part.description == _FRESH_DATA.description
+
+    def test_link_filled_on_apply(self) -> None:
+        part = _make_part(description="Already set", link="")
+        result = self._run(part=part, dry_run=False)
+        assert "part:link" in result["updated"]
+        assert part.link == _FRESH_DATA.link
+
+    def test_not_overwritten_on_apply(self) -> None:
+        part = _make_part(description="Keep this", link="https://keep.this")
+        result = self._run(part=part, dry_run=False)
+        assert "part:description" not in result["updated"]
+        assert "part:link" not in result["updated"]
+
+    def test_preview_reports_part_fields(self) -> None:
+        part = _make_part(description="", link="")
+        result = self._run(part=part, dry_run=True)
+        assert "part:description" in result["updated"]
+        assert "part:link" in result["updated"]
+
+    def test_diff_part_fields_when_empty(self) -> None:
+        result = self._run(part=_make_part(description="", link=""), dry_run=True)
+        rows = result["diff"]["part_fields"]
+        fields = {r["field"]: r for r in rows}
+        assert fields["description"]["status"] == "new"
+        assert fields["link"]["status"] == "new"
+
+    def test_diff_part_fields_skipped_when_set(self) -> None:
+        result = self._run(
+            part=_make_part(description="Exists", link="https://exists.com"),
+            dry_run=True,
+        )
+        rows = result["diff"]["part_fields"]
+        fields = {r["field"]: r for r in rows}
+        assert fields["description"]["status"] == "skipped"
+        assert fields["link"]["status"] == "skipped"
+
+
+# ---------------------------------------------------------------------------
+# SupplierPart parameter mirroring
+# ---------------------------------------------------------------------------
+
+
+class TestSupplierPartParameterMirrorBaseEnrich:
+    """SupplierPart gets parameters mirrored when using generic parameter model."""
+
+    _DL_PATCH = "inventree_import_plugin.base._download_and_set_image"
+
+    def _run(self, plugin, *, param_exists=False, dry_run=False):
+        _part = _make_part(description="Set", link="https://set.com")
+        _sp = _make_supplier_part()
+
+        with (
+            patch(_PT_PART) as MockPart,
+            patch(_PT_SP) as MockSP,
+            patch(_PT_PB) as MockPB,
+            patch(_PT_CT) as MockContentType,
+            patch(_PT_TMPL) as MockTmpl,
+            patch(_PT_PARAM) as MockParam,
+            patch(_PT_ATTACH) as MockAttach,
+            patch(self._DL_PATCH),
+            patch.object(plugin, "get_import_data", return_value=_FRESH_DATA),
+        ):
+            MockPart.DoesNotExist = Exception
+            MockPart.objects.get.return_value = _part
+            MockContentType.objects.get_for_model.return_value = "part-content-type"
+            _stub_qs_for_sp(MockSP, _sp)
+            _stub_pb_qs(MockPB, [])
+            template_mock = MagicMock()
+            MockTmpl.objects.get_or_create.return_value = (template_mock, True)
+            MockParam.objects.filter.return_value.exists.return_value = param_exists
+            _stub_attachment_for_base(MockAttach, has_datasheet=True)
+
+            return plugin._enrich_part(42, dry_run=dry_run)
+
+    def test_sp_parameter_created_when_not_present(self, mouser_plugin: MouserImportPlugin) -> None:
+        result = self._run(mouser_plugin, param_exists=False)
+        assert "supplier_parameter:Voltage" in result["updated"]
+
+    def test_sp_parameter_skipped_when_present(self, mouser_plugin: MouserImportPlugin) -> None:
+        result = self._run(mouser_plugin, param_exists=True)
+        assert "supplier_parameter:Voltage" in result["skipped"]
+
+    def test_sp_parameter_preview_no_create(self, mouser_plugin: MouserImportPlugin) -> None:
+        with (
+            patch(_PT_PART) as MockPart,
+            patch(_PT_SP) as MockSP,
+            patch(_PT_PB) as MockPB,
+            patch(_PT_CT) as MockContentType,
+            patch(_PT_TMPL) as MockTmpl,
+            patch(_PT_PARAM) as MockParam,
+            patch(_PT_ATTACH) as MockAttach,
+            patch(self._DL_PATCH),
+            patch.object(mouser_plugin, "get_import_data", return_value=_FRESH_DATA),
+        ):
+            MockPart.DoesNotExist = Exception
+            MockPart.objects.get.return_value = _make_part(
+                description="Set", link="https://set.com"
+            )
+            MockContentType.objects.get_for_model.return_value = "part-content-type"
+            _stub_qs_for_sp(MockSP, _make_supplier_part())
+            _stub_pb_qs(MockPB, [])
+            MockTmpl.objects.get_or_create.return_value = (MagicMock(), True)
+            MockParam.objects.filter.return_value.exists.return_value = False
+            _stub_attachment_for_base(MockAttach, has_datasheet=True)
+
+            result = mouser_plugin._enrich_part(42, dry_run=True)
+
+        assert "supplier_parameter:Voltage" in result["updated"]
+        MockParam.objects.create.assert_not_called()
+
+
+class TestSupplierPartParameterMirrorSvcEnrich:
+    """SupplierPart gets parameters mirrored in enrich_part_for_provider."""
+
+    def _run(self, *, param_exists=False, dry_run=True):
+        from inventree_import_plugin.services.enrich import enrich_part_for_provider
+
+        plugin = _MockCorePlugin()
+        _part = _make_part(description="Set", link="https://set.com")
+        _sp = _make_supplier_part()
+
+        with (
+            patch(_SVC_PART) as MockPart,
+            patch(_SVC_SP) as MockSP,
+            patch(_SVC_PB) as MockPB,
+            patch(_SVC_CT) as MockContentType,
+            patch(_SVC_TMPL) as MockTmpl,
+            patch(_SVC_PARAM) as MockParam,
+            patch(_SVC_DL),
+            patch(_SVC_ATTACH) as MockAttach,
+            patch.object(plugin, "get_import_data", return_value=_FRESH_DATA),
+        ):
+            MockPart.DoesNotExist = Exception
+            MockPart.objects.get.return_value = _part
+            MockContentType.objects.get_for_model.return_value = "part-content-type"
+            _svc_stub_qs_for_sp(MockSP, _sp)
+            _svc_stub_pb_qs(MockPB, [])
+            MockTmpl.objects.get_or_create.return_value = (MagicMock(), True)
+            MockParam.objects.filter.return_value.exists.return_value = param_exists
+            MockParam.objects.filter.return_value.first.return_value = (
+                MagicMock(data="5V") if param_exists else None
+            )
+            _stub_attachment(MockAttach, has_datasheet=True)
+
+            return enrich_part_for_provider(plugin, "test-provider", 42, dry_run=dry_run)
+
+    def test_sp_parameter_updated_when_new(self) -> None:
+        result = self._run(param_exists=False, dry_run=True)
+        assert "supplier_parameter:Voltage" in result["updated"]
+
+    def test_sp_parameter_skipped_when_exists(self) -> None:
+        result = self._run(param_exists=True, dry_run=True)
+        assert "supplier_parameter:Voltage" in result["skipped"]
+
+    def test_sp_parameter_created_on_apply(self) -> None:
+        result = self._run(param_exists=False, dry_run=False)
+        assert "supplier_parameter:Voltage" in result["updated"]
+
+
+# ---------------------------------------------------------------------------
+# _key_allowed helper
+# ---------------------------------------------------------------------------
+
+
+class TestKeyAllowed:
+    def test_none_allows_all(self) -> None:
+        from inventree_import_plugin.services.enrich import _key_allowed
+
+        assert _key_allowed("anything", None) is True
+
+    def test_matching_key_allowed(self) -> None:
+        from inventree_import_plugin.services.enrich import _key_allowed
+
+        assert _key_allowed("image", {"image", "datasheet_link"}) is True
+
+    def test_non_matching_key_blocked(self) -> None:
+        from inventree_import_plugin.services.enrich import _key_allowed
+
+        assert _key_allowed("image", {"datasheet_link"}) is False
+
+    def test_empty_set_blocks_all(self) -> None:
+        from inventree_import_plugin.services.enrich import _key_allowed
+
+        assert _key_allowed("image", set()) is False
+
+
+# ---------------------------------------------------------------------------
+# enrich_part_for_provider with selected_keys (partial apply)
+# ---------------------------------------------------------------------------
+
+
+_SVC_GPA = "inventree_import_plugin.services.enrich.get_provider_adapters"
+
+
+class TestSelectedKeysApply:
+    """Test that selected_keys gates which writes happen during apply."""
+
+    def _run(
+        self,
+        *,
+        selected_keys: set[str] | None = None,
+        part=None,
+    ):
+        from inventree_import_plugin.services.enrich import enrich_part_for_provider
+
+        plugin = _MockCorePlugin()
+        _part = part or _make_part()
+        _sp = _make_supplier_part()
+
+        with (
+            patch(_SVC_PART) as MockPart,
+            patch(_SVC_SP) as MockSP,
+            patch(_SVC_PB) as MockPB,
+            patch(_SVC_CT) as MockContentType,
+            patch(_SVC_TMPL) as MockTmpl,
+            patch(_SVC_PARAM) as MockParam,
+            patch(_SVC_DL) as MockDL,
+            patch(_SVC_ATTACH) as MockAttach,
+            patch.object(plugin, "get_import_data", return_value=_FRESH_DATA),
+        ):
+            MockPart.DoesNotExist = Exception
+            MockPart.objects.get.return_value = _part
+            MockContentType.objects.get_for_model.return_value = "part-content-type"
+            _svc_stub_qs_for_sp(MockSP, _sp)
+            _svc_stub_pb_qs(MockPB, [])
+            MockTmpl.objects.get_or_create.return_value = (MagicMock(), True)
+            MockParam.objects.filter.return_value.exists.return_value = False
+            _stub_attachment(MockAttach, has_datasheet=False)
+
+            return enrich_part_for_provider(
+                plugin,
+                "test-provider",
+                42,
+                dry_run=False,
+                selected_keys=selected_keys,
+            )
+
+    def test_none_selected_keys_applies_all(self) -> None:
+        """selected_keys=None (default) applies everything — backward-compatible."""
+        result = self._run(selected_keys=None)
+        assert "image" in result["updated"]
+        assert "datasheet_link" in result["updated"]
+        assert any(k.startswith("price_break:") for k in result["updated"])
+        assert any(k.startswith("parameter:") for k in result["updated"])
+
+    def test_image_only(self) -> None:
+        result = self._run(selected_keys={"image"})
+        assert "image" in result["updated"]
+        assert "datasheet_link" not in result["updated"]
+        assert all(not k.startswith("price_break:") for k in result["updated"])
+
+    def test_datasheet_only(self) -> None:
+        result = self._run(selected_keys={"datasheet_link"})
+        assert "datasheet_link" in result["updated"]
+        assert "image" not in result["updated"]
+
+    def test_price_breaks_only(self) -> None:
+        result = self._run(selected_keys={"price_break:1", "price_break:10"})
+        pb_updated = [k for k in result["updated"] if k.startswith("price_break:")]
+        assert len(pb_updated) == 2
+        assert "image" not in result["updated"]
+
+    def test_parameter_only(self) -> None:
+        result = self._run(selected_keys={"parameter:Voltage"})
+        assert "parameter:Voltage" in result["updated"]
+        assert "image" not in result["updated"]
+        assert "datasheet_link" not in result["updated"]
+
+    def test_empty_set_applies_nothing(self) -> None:
+        result = self._run(selected_keys=set())
+        assert result["updated"] == []
+        assert all(k in result["skipped"] for k in ["image", "datasheet_link"])
+
+    def test_part_field_gated(self) -> None:
+        part = _make_part(description="", link="")
+        result = self._run(selected_keys={"part:description"}, part=part)
+        assert "part:description" in result["updated"]
+        assert "part:link" not in result["updated"]
+
+    def test_supplier_part_gated(self) -> None:
+        result = self._run(selected_keys={"supplier_part:link"})
+        sp_updated = [k for k in result["updated"] if k.startswith("supplier_part:")]
+        assert sp_updated == ["supplier_part:link"]
+
+
+# ---------------------------------------------------------------------------
+# parse_bulk_operations
+# ---------------------------------------------------------------------------
+
+
+def _make_adapter(slug: str = "test-provider") -> MagicMock:
+    adapter = MagicMock()
+    adapter.definition.slug = slug
+    return adapter
+
+
+class TestParseBulkOperations:
+    def _make_request(self, operations):
+        request = MagicMock()
+        request.data = {"operations": operations}
+        return request
+
+    def _make_plugin(self, batch_size=50):
+        plugin = MagicMock()
+        plugin.get_setting.return_value = batch_size
+        return plugin
+
+    def test_valid_operations(self) -> None:
+        from inventree_import_plugin.services.enrich import parse_bulk_operations
+
+        plugin = self._make_plugin()
+        request = self._make_request(
+            [
+                {"part_id": 1, "provider_slug": "test-provider", "selected_keys": ["image"]},
+                {"part_id": 2, "provider_slug": "test-provider"},
+            ]
+        )
+        with patch(_SVC_GPA, return_value=(_make_adapter("test-provider"),)):
+            result = parse_bulk_operations(plugin, request)
+
+        assert len(result) == 2
+        assert result[0]["part_id"] == 1
+        assert result[0]["selected_keys"] == {"image"}
+        assert result[1]["part_id"] == 2
+        assert result[1]["selected_keys"] is None
+
+    def test_missing_operations_key_raises(self) -> None:
+        from inventree_import_plugin.services.enrich import parse_bulk_operations
+
+        plugin = self._make_plugin()
+        request = MagicMock()
+        request.data = {}
+        with pytest.raises(ValueError, match="operations is required"):
+            parse_bulk_operations(plugin, request)
+
+    def test_empty_operations_raises(self) -> None:
+        from inventree_import_plugin.services.enrich import parse_bulk_operations
+
+        plugin = self._make_plugin()
+        request = self._make_request([])
+        with patch(_SVC_GPA, return_value=(_make_adapter("test-provider"),)):
+            with pytest.raises(ValueError, match="At least one operation"):
+                parse_bulk_operations(plugin, request)
+
+    def test_batch_size_exceeded(self) -> None:
+        from inventree_import_plugin.services.enrich import parse_bulk_operations
+
+        plugin = self._make_plugin(batch_size=2)
+        ops = [{"part_id": i, "provider_slug": "test-provider"} for i in range(1, 4)]
+        request = self._make_request(ops)
+        with patch(_SVC_GPA, return_value=(_make_adapter("test-provider"),)):
+            with pytest.raises(ValueError, match="Too many operations"):
+                parse_bulk_operations(plugin, request)
+
+    def test_invalid_provider_slug_raises(self) -> None:
+        from inventree_import_plugin.services.enrich import parse_bulk_operations
+
+        plugin = self._make_plugin()
+        request = self._make_request(
+            [
+                {"part_id": 1, "provider_slug": "no-such-provider"},
+            ]
+        )
+        with patch(_SVC_GPA, return_value=(_make_adapter("test-provider"),)):
+            with pytest.raises(ValueError, match="Invalid provider slug"):
+                parse_bulk_operations(plugin, request)
+
+    def test_missing_part_id_raises(self) -> None:
+        from inventree_import_plugin.services.enrich import parse_bulk_operations
+
+        plugin = self._make_plugin()
+        request = self._make_request(
+            [
+                {"provider_slug": "test-provider"},
+            ]
+        )
+        with patch(_SVC_GPA, return_value=(_make_adapter("test-provider"),)):
+            with pytest.raises(ValueError, match="part_id"):
+                parse_bulk_operations(plugin, request)
+
+    def test_missing_provider_slug_raises(self) -> None:
+        from inventree_import_plugin.services.enrich import parse_bulk_operations
+
+        plugin = self._make_plugin()
+        request = self._make_request(
+            [
+                {"part_id": 1},
+            ]
+        )
+        with patch(_SVC_GPA, return_value=(_make_adapter("test-provider"),)):
+            with pytest.raises(ValueError, match="provider_slug"):
+                parse_bulk_operations(plugin, request)
+
+    def test_selected_keys_converted_to_set(self) -> None:
+        from inventree_import_plugin.services.enrich import parse_bulk_operations
+
+        plugin = self._make_plugin()
+        request = self._make_request(
+            [
+                {
+                    "part_id": 1,
+                    "provider_slug": "test-provider",
+                    "selected_keys": ["image", "datasheet_link"],
+                },
+            ]
+        )
+        with patch(_SVC_GPA, return_value=(_make_adapter("test-provider"),)):
+            result = parse_bulk_operations(plugin, request)
+
+        assert result[0]["selected_keys"] == {"image", "datasheet_link"}
+
+    def test_selected_keys_none_when_absent(self) -> None:
+        from inventree_import_plugin.services.enrich import parse_bulk_operations
+
+        plugin = self._make_plugin()
+        request = self._make_request(
+            [
+                {"part_id": 1, "provider_slug": "test-provider"},
+            ]
+        )
+        with patch(_SVC_GPA, return_value=(_make_adapter("test-provider"),)):
+            result = parse_bulk_operations(plugin, request)
+
+        assert result[0]["selected_keys"] is None
+
+
+# ---------------------------------------------------------------------------
+# bulk_enrich with operations parameter
+# ---------------------------------------------------------------------------
+
+
+class TestBulkEnrichOperations:
+    """Test bulk_enrich with explicit operations list."""
+
+    def _run(self, operations, *, dry_run=False):
+        from inventree_import_plugin.services.enrich import bulk_enrich
+
+        plugin = _MockCorePlugin()
+        _part = _make_part()
+        _sp = _make_supplier_part()
+
+        with (
+            patch(_SVC_PART) as MockPart,
+            patch(_SVC_SP) as MockSP,
+            patch(_SVC_PB) as MockPB,
+            patch(_SVC_CT) as MockContentType,
+            patch(_SVC_TMPL) as MockTmpl,
+            patch(_SVC_PARAM) as MockParam,
+            patch(_SVC_DL),
+            patch(_SVC_ATTACH) as MockAttach,
+            patch.object(plugin, "get_import_data", return_value=_FRESH_DATA),
+        ):
+            MockPart.DoesNotExist = Exception
+            MockPart.objects.get.return_value = _part
+            MockContentType.objects.get_for_model.return_value = "part-content-type"
+            _svc_stub_qs_for_sp(MockSP, _sp)
+            _svc_stub_pb_qs(MockPB, [])
+            MockTmpl.objects.get_or_create.return_value = (MagicMock(), True)
+            MockParam.objects.filter.return_value.exists.return_value = False
+            _stub_attachment(MockAttach, has_datasheet=False)
+
+            return bulk_enrich(plugin, dry_run=dry_run, operations=operations)
+
+    def test_operations_with_selected_keys(self) -> None:
+        result = self._run(
+            operations=[
+                {
+                    "part_id": 1,
+                    "provider_slug": "test-provider",
+                    "selected_keys": {"image"},
+                },
+            ],
+            dry_run=False,
+        )
+        assert result["summary"]["operations"] == 1
+        r = result["results"][0]
+        assert "image" in r["updated"]
+        assert "datasheet_link" not in r["updated"]
+
+    def test_operations_without_selected_keys(self) -> None:
+        result = self._run(
+            operations=[
+                {"part_id": 1, "provider_slug": "test-provider", "selected_keys": None},
+            ],
+            dry_run=False,
+        )
+        r = result["results"][0]
+        assert "image" in r["updated"]
+        assert "datasheet_link" in r["updated"]
+
+    def test_legacy_path_still_works(self) -> None:
+        """Ensure backward-compatible legacy path via part_ids + provider_slugs."""
+        from inventree_import_plugin.services.enrich import bulk_enrich
+
+        plugin = _MockCorePlugin()
+        _part = _make_part()
+        _sp = _make_supplier_part()
+
+        with (
+            patch(_SVC_PART) as MockPart,
+            patch(_SVC_SP) as MockSP,
+            patch(_SVC_PB) as MockPB,
+            patch(_SVC_CT) as MockContentType,
+            patch(_SVC_TMPL) as MockTmpl,
+            patch(_SVC_PARAM) as MockParam,
+            patch(_SVC_DL),
+            patch(_SVC_ATTACH) as MockAttach,
+            patch.object(plugin, "get_import_data", return_value=_FRESH_DATA),
+        ):
+            MockPart.DoesNotExist = Exception
+            MockPart.objects.get.return_value = _part
+            MockContentType.objects.get_for_model.return_value = "part-content-type"
+            _svc_stub_qs_for_sp(MockSP, _sp)
+            _svc_stub_pb_qs(MockPB, [])
+            MockTmpl.objects.get_or_create.return_value = (MagicMock(), True)
+            MockParam.objects.filter.return_value.exists.return_value = False
+            _stub_attachment(MockAttach, has_datasheet=False)
+
+            result = bulk_enrich(plugin, [1], ["test-provider"], dry_run=False)
+
+        assert result["summary"]["operations"] == 1
+        r = result["results"][0]
+        assert "image" in r["updated"]

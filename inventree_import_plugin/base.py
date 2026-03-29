@@ -201,6 +201,16 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
                 "link": data.link,
             },
         )
+        if not _created:
+            _part_updates: dict[str, Any] = {}
+            if not part.description and data.description:
+                _part_updates["description"] = data.description
+            if not part.link and data.link:
+                _part_updates["link"] = data.link
+            if _part_updates:
+                for field, value in _part_updates.items():
+                    setattr(part, field, value)
+                part.save(update_fields=list(_part_updates.keys()))
         if data.image_url and not part.image:
             try:
                 _download_and_set_image(part, data.image_url)
@@ -343,6 +353,24 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
                     supplier_part.available = available_quantity
                     supplier_part.save(update_fields=["available"])
 
+        # Part description/link — fill from supplier data when empty
+        _part_updates: dict[str, Any] = {}
+        if not getattr(part, "description", None) and fresh.description:
+            _part_updates["description"] = fresh.description
+        if not getattr(part, "link", None) and fresh.link:
+            _part_updates["link"] = fresh.link
+
+        if _part_updates:
+            if dry_run:
+                for field in _part_updates:
+                    updated.append(f"part:{field}")
+            else:
+                for field, value in _part_updates.items():
+                    setattr(part, field, value)
+                part.save(update_fields=list(_part_updates.keys()))
+                for field in _part_updates:
+                    updated.append(f"part:{field}")
+
         # Image — only if the part has none
         if fresh.image_url and not part.image:
             if dry_run:
@@ -430,6 +458,20 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
                         updated.append(f"parameter:{param.name}")
                 else:
                     skipped.append(f"parameter:{param.name}")
+
+                # Mirror onto SupplierPart when using generic parameter model
+                if content_type_model is not None:
+                    sp_kwargs = _parameter_filter_kwargs(
+                        supplier_part, template, content_type_model
+                    )
+                    if not parameter_model.objects.filter(**sp_kwargs).exists():
+                        if dry_run:
+                            updated.append(f"supplier_parameter:{param.name}")
+                        else:
+                            parameter_model.objects.create(**sp_kwargs, data=param.value)
+                            updated.append(f"supplier_parameter:{param.name}")
+                    else:
+                        skipped.append(f"supplier_parameter:{param.name}")
             except Exception as exc:
                 errors.append(f"parameter:{param.name}: {exc}")
 

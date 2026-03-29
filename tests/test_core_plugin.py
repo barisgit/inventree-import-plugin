@@ -229,3 +229,98 @@ class TestCombinedPluginSupplierPartImport:
         supplier_part.save.assert_called_once()
         assert set(supplier_part.save.call_args.kwargs["update_fields"]) == {"description", "link"}
         supplier_part.update_available_quantity.assert_called_once_with(25)
+
+
+class TestImportPartFieldFilling:
+    """import_part fills empty Part description/link from supplier data."""
+
+    def test_fills_description_when_empty(self) -> None:
+        plugin = InvenTreeImportPlugin()
+
+        part = MagicMock()
+        part.description = ""
+        part.link = "https://already.set"
+        part.image = ""
+
+        data = PartData(
+            sku="C123",
+            name="Part",
+            description="Supplier description",
+            link="https://supplier.com",
+        )
+
+        with patch("part.models.Part") as MockPart:
+            MockPart.objects.get_or_create.return_value = (part, False)
+            result = plugin.import_part(data)
+
+        assert result is part
+        assert part.description == "Supplier description"
+        assert part.link == "https://already.set"
+        part.save.assert_called_once()
+
+    def test_fills_link_when_empty(self) -> None:
+        plugin = InvenTreeImportPlugin()
+
+        part = MagicMock()
+        part.description = "Already set"
+        part.link = ""
+        part.image = ""
+
+        data = PartData(
+            sku="C123",
+            name="Part",
+            description="Supplier description",
+            link="https://supplier.com",
+        )
+
+        with patch("part.models.Part") as MockPart:
+            MockPart.objects.get_or_create.return_value = (part, False)
+            result = plugin.import_part(data)
+
+        assert result is part
+        assert part.description == "Already set"
+        assert part.link == "https://supplier.com"
+
+    def test_does_not_overwrite_existing_fields(self) -> None:
+        plugin = InvenTreeImportPlugin()
+
+        part = MagicMock()
+        part.description = "Keep this"
+        part.link = "https://keep.this"
+        part.image = ""
+
+        data = PartData(
+            sku="C123",
+            name="Part",
+            description="Supplier description",
+            link="https://supplier.com",
+        )
+
+        with patch("part.models.Part") as MockPart:
+            MockPart.objects.get_or_create.return_value = (part, False)
+            result = plugin.import_part(data)
+
+        assert result is part
+        assert part.description == "Keep this"
+        assert part.link == "https://keep.this"
+        part.save.assert_not_called()
+
+    def test_no_save_when_part_created(self) -> None:
+        plugin = InvenTreeImportPlugin()
+
+        part = MagicMock()
+        part.image = ""
+
+        data = PartData(
+            sku="C123",
+            name="Part",
+            description="Description",
+            link="https://supplier.com",
+        )
+
+        with patch("part.models.Part") as MockPart:
+            MockPart.objects.get_or_create.return_value = (part, True)
+            result = plugin.import_part(data)
+
+        assert result is part
+        part.save.assert_not_called()

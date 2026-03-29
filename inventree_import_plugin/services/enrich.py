@@ -18,6 +18,14 @@ DATASHEET_ATTACHMENT_COMMENT = "Datasheet (supplier)"
 """Stable comment used to tag and identify datasheet link attachments."""
 
 
+def _key_allowed(key: str, selected_keys: set[str] | None) -> bool:
+    """Return True if *key* passes the ``selected_keys`` filter.
+
+    ``None`` means *all keys are allowed* (backward-compatible default).
+    """
+    return selected_keys is None or key in selected_keys
+
+
 def _has_datasheet_attachment(part: Any) -> bool:
     """Check whether the part already has a datasheet link attachment."""
     from common.models import Attachment
@@ -141,6 +149,21 @@ def _build_diff(
                     {"field": field, "current": current, "incoming": value, "status": "skipped"}
                 )
 
+    # Part description/link diff
+    part_field_rows: list[dict[str, Any]] = []
+    for field in ("description", "link"):
+        current = getattr(part, field, None) or None
+        incoming = getattr(fresh, field, None) or None
+        changed = not current and incoming
+        part_field_rows.append(
+            {
+                "field": field,
+                "current": current,
+                "incoming": incoming,
+                "status": "new" if changed else "skipped",
+            }
+        )
+
     # Image diff
     image_diff: dict[str, Any] | None = None
     if fresh.image_url and not part.image:
@@ -232,12 +255,18 @@ def _build_diff(
         "datasheet": datasheet_diff,
         "price_breaks": price_break_rows,
         "parameters": parameter_rows,
+        "part_fields": part_field_rows,
         "supplier_part": sp_diff_rows,
     }
 
 
 def enrich_part_for_provider(
-    plugin: Any, provider_slug: str, part_id: int, *, dry_run: bool = False
+    plugin: Any,
+    provider_slug: str,
+    part_id: int,
+    *,
+    dry_run: bool = False,
+    selected_keys: set[str] | None = None,
 ) -> dict[str, Any]:
     from company.models import SupplierPart, SupplierPriceBreak
     from part.models import Part
@@ -317,41 +346,83 @@ def enrich_part_for_provider(
     regular_updates, available_quantity = supplier_part_update_values(supplier_part, fresh)
 
     for field in regular_updates:
-        updated.append(f"supplier_part:{field}")
+        key = f"supplier_part:{field}"
+        if dry_run or _key_allowed(key, selected_keys):
+            updated.append(key)
+        else:
+            skipped.append(key)
 
     if available_quantity is not None:
-        updated.append("supplier_part:available")
+        key = "supplier_part:available"
+        if dry_run or _key_allowed(key, selected_keys):
+            updated.append(key)
+        else:
+            skipped.append(key)
 
     if not dry_run:
-        if regular_updates:
-            for field, value in regular_updates.items():
+        allowed_updates = {
+            f: v
+            for f, v in regular_updates.items()
+            if _key_allowed(f"supplier_part:{f}", selected_keys)
+        }
+        if allowed_updates:
+            for field, value in allowed_updates.items():
                 setattr(supplier_part, field, value)
-            supplier_part.save(update_fields=list(regular_updates.keys()))
+            supplier_part.save(update_fields=list(allowed_updates.keys()))
 
-        if available_quantity is not None:
+        if available_quantity is not None and _key_allowed(
+            "supplier_part:available", selected_keys
+        ):
             if hasattr(supplier_part, "update_available_quantity"):
                 supplier_part.update_available_quantity(available_quantity)
             else:
                 supplier_part.available = available_quantity
                 supplier_part.save(update_fields=["available"])
 
+    # Part description/link — fill from supplier data when empty
+    _part_updates: dict[str, Any] = {}
+    if not getattr(part, "description", None) and fresh.description:
+        _part_updates["description"] = fresh.description
+    if not getattr(part, "link", None) and fresh.link:
+        _part_updates["link"] = fresh.link
+
+    if _part_updates:
+        if dry_run:
+            for field in _part_updates:
+                updated.append(f"part:{field}")
+        else:
+            allowed_part_updates = {
+                f: v for f, v in _part_updates.items() if _key_allowed(f"part:{f}", selected_keys)
+            }
+            if allowed_part_updates:
+                for field, value in allowed_part_updates.items():
+                    setattr(part, field, value)
+                part.save(update_fields=list(allowed_part_updates.keys()))
+                for field in allowed_part_updates:
+                    updated.append(f"part:{field}")
+            for field in _part_updates:
+                if field not in allowed_part_updates:
+                    skipped.append(f"part:{field}")
+
     if fresh.image_url and not part.image:
         if dry_run:
             updated.append("image")
-        else:
+        elif _key_allowed("image", selected_keys):
             try:
                 _download_and_set_image(part, fresh.image_url)
                 updated.append("image")
             except Exception as exc:
                 logger.warning("Failed to download image for part %s: %s", part_id, exc)
                 errors.append(f"image: {exc}")
+        else:
+            skipped.append("image")
     else:
         skipped.append("image")
 
     if fresh.datasheet_url and not _has_datasheet_attachment(part):
         if dry_run:
             updated.append("datasheet_link")
-        else:
+        elif _key_allowed("datasheet_link", selected_keys):
             try:
                 _create_datasheet_attachment(part, fresh.datasheet_url)
                 updated.append("datasheet_link")
@@ -360,6 +431,8 @@ def enrich_part_for_provider(
                     "Failed to create datasheet attachment for part %s: %s", part_id, exc
                 )
                 errors.append(f"datasheet_link: {exc}")
+        else:
+            skipped.append("datasheet_link")
     else:
         skipped.append("datasheet_link")
 
@@ -371,6 +444,10 @@ def enrich_part_for_provider(
 
         if dry_run:
             updated.append(key)
+            continue
+
+        if not _key_allowed(key, selected_keys):
+            skipped.append(key)
             continue
 
         try:
@@ -385,11 +462,12 @@ def enrich_part_for_provider(
             errors.append(f"{key}: {exc}")
 
     for param in fresh.parameters:
+        key = f"parameter:{param.name}"
         try:
             if dry_run:
                 template = parameter_template_model.objects.filter(name=param.name).first()
                 if template is None:
-                    updated.append(f"parameter:{param.name}")
+                    updated.append(key)
                     continue
             else:
                 template, _ = parameter_template_model.objects.get_or_create(
@@ -398,17 +476,31 @@ def enrich_part_for_provider(
                 )
 
             parameter_kwargs = _parameter_filter_kwargs(part, template, content_type_model)
-            key = f"parameter:{param.name}"
             if parameter_model.objects.filter(**parameter_kwargs).exists():
                 skipped.append(key)
-                continue
+            else:
+                if dry_run:
+                    updated.append(key)
+                elif _key_allowed(key, selected_keys):
+                    parameter_model.objects.create(**parameter_kwargs, data=param.value)
+                    updated.append(key)
+                else:
+                    skipped.append(key)
 
-            if dry_run:
-                updated.append(key)
-                continue
-
-            parameter_model.objects.create(**parameter_kwargs, data=param.value)
-            updated.append(key)
+            # Mirror onto SupplierPart when using generic parameter model
+            if content_type_model is not None:
+                sp_kwargs = _parameter_filter_kwargs(supplier_part, template, content_type_model)
+                sp_key = f"supplier_parameter:{param.name}"
+                if parameter_model.objects.filter(**sp_kwargs).exists():
+                    skipped.append(sp_key)
+                else:
+                    if dry_run:
+                        updated.append(sp_key)
+                    elif _key_allowed(sp_key, selected_keys):
+                        parameter_model.objects.create(**sp_kwargs, data=param.value)
+                        updated.append(sp_key)
+                    else:
+                        skipped.append(sp_key)
         except Exception as exc:
             errors.append(f"parameter:{param.name}: {exc}")
 
@@ -430,22 +522,43 @@ def enrich_part_for_provider(
 
 
 def bulk_enrich(
-    plugin: Any, part_ids: list[int], provider_slugs: list[str], *, dry_run: bool
+    plugin: Any,
+    part_ids: list[int] | None = None,
+    provider_slugs: list[str] | None = None,
+    *,
+    dry_run: bool,
+    operations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
 
-    for part_id in part_ids:
-        for provider_slug in provider_slugs:
+    if operations is not None:
+        for op in operations:
             results.append(
-                enrich_part_for_provider(plugin, provider_slug, part_id, dry_run=dry_run)
+                enrich_part_for_provider(
+                    plugin,
+                    op["provider_slug"],
+                    op["part_id"],
+                    dry_run=dry_run,
+                    selected_keys=op.get("selected_keys"),
+                )
             )
+        requested_parts = len({op["part_id"] for op in operations})
+        provider_count = len({op["provider_slug"] for op in operations})
+    else:
+        for part_id in part_ids or []:
+            for provider_slug in provider_slugs or []:
+                results.append(
+                    enrich_part_for_provider(plugin, provider_slug, part_id, dry_run=dry_run)
+                )
+        requested_parts = len(part_ids or [])
+        provider_count = len(provider_slugs or [])
 
     failed = sum(1 for result in results if result["errors"])
     return {
         "results": results,
         "summary": {
-            "requested_parts": len(part_ids),
-            "provider_count": len(provider_slugs),
+            "requested_parts": requested_parts,
+            "provider_count": provider_count,
             "operations": len(results),
             "failed": failed,
             "succeeded": len(results) - failed,
@@ -483,3 +596,63 @@ def parse_bulk_payload(plugin: Any, request: Any) -> tuple[list[int], list[str]]
         raise ValueError("At least one provider is required")
 
     return part_ids, provider_slugs
+
+
+def parse_bulk_operations(plugin: Any, request: Any) -> list[dict[str, Any]]:
+    """Parse the explicit-operations bulk payload format.
+
+    Each operation is ``{part_id, provider_slug, selected_keys?: string[]}``.
+    Returns a list of dicts with ``selected_keys`` converted to ``set[str] | None``.
+    """
+    raw_operations = request.data.get("operations")
+    if raw_operations is None:
+        raise ValueError("operations is required")
+    if not isinstance(raw_operations, list):
+        raise ValueError("operations must be a list")
+
+    valid_slugs = {adapter.definition.slug for adapter in get_provider_adapters()}
+    batch_size = int(plugin.get_setting("BULK_BATCH_SIZE", 50) or 50)
+
+    operations: list[dict[str, Any]] = []
+    for raw_op in raw_operations:
+        if not isinstance(raw_op, dict):
+            raise ValueError("Each operation must be an object")
+
+        part_id = raw_op.get("part_id")
+        provider_slug = raw_op.get("provider_slug")
+
+        if part_id is None:
+            raise ValueError("Each operation must have a part_id")
+        if provider_slug is None:
+            raise ValueError("Each operation must have a provider_slug")
+
+        try:
+            part_id = int(part_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("part_id must be an integer") from exc
+
+        if not isinstance(provider_slug, str) or provider_slug not in valid_slugs:
+            raise ValueError(f"Invalid provider slug: {provider_slug}")
+
+        raw_keys = raw_op.get("selected_keys")
+        if raw_keys is not None:
+            if not isinstance(raw_keys, list):
+                raise ValueError("selected_keys must be a list of strings")
+            selected_keys: set[str] | None = {k for k in raw_keys if isinstance(k, str)}
+        else:
+            selected_keys = None
+
+        operations.append(
+            {
+                "part_id": part_id,
+                "provider_slug": provider_slug,
+                "selected_keys": selected_keys,
+            }
+        )
+
+    if not operations:
+        raise ValueError("At least one operation is required")
+    if len(operations) > batch_size:
+        raise ValueError(f"Too many operations supplied (max {batch_size})")
+
+    return operations
