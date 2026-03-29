@@ -7,15 +7,7 @@
 </head>
 <body>
     <div id="inventree-import-plugin-bulk-root"></div>
-    <script type="module">
-        import { renderStandaloneBulkPage } from "{{ bundle_url }}";
-
-        const target = document.getElementById("inventree-import-plugin-bulk-root");
-        const mountContext = {{ mount_context_json|safe }};
-
-        if (target) {
-            renderStandaloneBulkPage(target, mountContext);
-        }
-    </script>
+    <script>window.__BULK_MOUNT_CONTEXT__ = {{ mount_context_json|safe }};</script>
+    <script type="module">{{ bundle_js|safe }}</script>
 </body>
 </html>

@@ -343,3 +343,15 @@ function BulkPage({ mountContext }: { mountContext: BulkMountContext }) {
 export function renderStandaloneBulkPage(target: HTMLElement, mountContext: BulkMountContext) {
   createRoot(target).render(<BulkPage mountContext={mountContext} />);
 }
+
+// Self-mount: when the bundle is inlined in the server-rendered HTML the
+// template sets window.__BULK_MOUNT_CONTEXT__ before this script executes.
+if (typeof window !== 'undefined') {
+  const ctx = (window as unknown as Record<string, unknown>).__BULK_MOUNT_CONTEXT__;
+  if (ctx) {
+    const target = document.getElementById('inventree-import-plugin-bulk-root');
+    if (target) {
+      renderStandaloneBulkPage(target, ctx as BulkMountContext);
+    }
+  }
+}

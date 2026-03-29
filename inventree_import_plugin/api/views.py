@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import pathlib
 from typing import Any
 
 from inventree_import_plugin.services import (
@@ -52,6 +53,13 @@ def build_urlpatterns(plugin: Any) -> list[Any]:
             return Response(bulk_enrich(plugin, part_ids, provider_slugs, dry_run=False))
 
     class _BulkPageView(_BaseRoleView):
+        _bundle_path = (
+            pathlib.Path(__file__).resolve().parent.parent
+            / "static"
+            / "bulk"
+            / "StandaloneBulkPage-v2.js"
+        )
+
         def get(inner_self, request: Any) -> Any:  # noqa: N805
             active_providers = [
                 {
@@ -61,8 +69,12 @@ def build_urlpatterns(plugin: Any) -> list[Any]:
                 for adapter in plugin._get_active_provider_adapters(require_complete_config=True)
             ]
 
+            bundle_js = ""
+            if inner_self._bundle_path.exists():
+                bundle_js = inner_self._bundle_path.read_text(encoding="utf-8")
+
             context = {
-                "bundle_url": plugin.plugin_static_file("bulk/StandaloneBulkPage-v2.js"),
+                "bundle_js": bundle_js,
                 "mount_context_json": json.dumps(
                     {
                         "pluginSlug": plugin.SLUG,
