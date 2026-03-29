@@ -180,6 +180,7 @@ _PT_PB = "company.models.SupplierPriceBreak"
 _PT_CT = "django.contrib.contenttypes.models.ContentType"
 _PT_TMPL = "common.models.ParameterTemplate"
 _PT_PARAM = "common.models.Parameter"
+_PT_ATTACH = "common.models.Attachment"
 
 
 def _stub_qs_for_sp(mock_sp_cls: MagicMock, sp_instance: MagicMock | None) -> None:
@@ -215,6 +216,7 @@ class TestEnrichPart:
         existing_pb_quantities: list[int] | None = None,
         param_exists: bool = False,
         dry_run: bool = False,
+        has_datasheet_attachment: bool = False,
     ) -> dict:
         _part = part or _make_part()
         _sp = supplier_part or _make_supplier_part()
@@ -226,6 +228,7 @@ class TestEnrichPart:
             patch(_PT_CT) as MockContentType,
             patch(_PT_TMPL) as MockTmpl,
             patch(_PT_PARAM) as MockParam,
+            patch(_PT_ATTACH) as MockAttach,
             patch(self._DL_PATCH) as _mock_dl,
             patch.object(plugin, "get_import_data", return_value=fresh_data),
         ):
@@ -239,6 +242,8 @@ class TestEnrichPart:
             template_mock = MagicMock()
             MockTmpl.objects.get_or_create.return_value = (template_mock, True)
             MockParam.objects.filter.return_value.exists.return_value = param_exists
+
+            _stub_attachment_for_base(MockAttach, has_datasheet=has_datasheet_attachment)
 
             return plugin._enrich_part(42, dry_run=dry_run)
 
@@ -270,6 +275,7 @@ class TestEnrichPart:
             patch(_PT_CT) as MockContentType,
             patch(_PT_TMPL) as MockTmpl,
             patch(_PT_PARAM) as MockParam,
+            patch(_PT_ATTACH) as MockAttach,
             patch(self._DL_PATCH) as mock_dl,
             patch.object(mouser_plugin, "get_import_data", return_value=_FRESH_DATA),
         ):
@@ -280,6 +286,7 @@ class TestEnrichPart:
             _stub_pb_qs(MockPB, [])
             MockTmpl.objects.get_or_create.return_value = (MagicMock(), True)
             MockParam.objects.filter.return_value.exists.return_value = False
+            _stub_attachment_for_base(MockAttach, has_datasheet=False)
 
             result = mouser_plugin._enrich_part(42)
 
@@ -297,6 +304,7 @@ class TestEnrichPart:
             patch(_PT_CT) as MockContentType,
             patch(_PT_TMPL) as MockTmpl,
             patch(_PT_PARAM) as MockParam,
+            patch(_PT_ATTACH) as MockAttach,
             patch(self._DL_PATCH) as mock_dl,
             patch.object(mouser_plugin, "get_import_data", return_value=_FRESH_DATA),
         ):
@@ -307,6 +315,7 @@ class TestEnrichPart:
             _stub_pb_qs(MockPB, [])
             MockTmpl.objects.get_or_create.return_value = (MagicMock(), True)
             MockParam.objects.filter.return_value.exists.return_value = False
+            _stub_attachment_for_base(MockAttach, has_datasheet=False)
 
             result = mouser_plugin._enrich_part(42)
 
@@ -314,16 +323,13 @@ class TestEnrichPart:
         mock_dl.assert_not_called()
 
     def test_datasheet_link_updated_when_empty(self, mouser_plugin: MouserImportPlugin) -> None:
-        part = _make_part(link="")
-        result = self._run(mouser_plugin, part=part)
+        result = self._run(mouser_plugin, has_datasheet_attachment=False)
         assert "datasheet_link" in result["updated"]
-        assert part.link == _FRESH_DATA.datasheet_url
 
     def test_datasheet_link_skipped_when_already_set(
         self, mouser_plugin: MouserImportPlugin
     ) -> None:
-        part = _make_part(link="https://existing.com/ds.pdf")
-        result = self._run(mouser_plugin, part=part)
+        result = self._run(mouser_plugin, has_datasheet_attachment=True)
         assert "datasheet_link" in result["skipped"]
 
     def test_price_breaks_added_for_new_quantities(self, mouser_plugin: MouserImportPlugin) -> None:
@@ -416,6 +422,7 @@ class TestEnrichPreview:
             patch(_PT_CT) as MockContentType,
             patch(_PT_TMPL) as MockTmpl,
             patch(_PT_PARAM) as MockParam,
+            patch(_PT_ATTACH) as MockAttach,
             patch(self._DL_PATCH) as mock_dl,
             patch.object(mouser_plugin, "get_import_data", return_value=_FRESH_DATA),
         ):
@@ -426,6 +433,7 @@ class TestEnrichPreview:
             _stub_pb_qs(MockPB, [])
             MockTmpl.objects.get_or_create.return_value = (MagicMock(), True)
             MockParam.objects.filter.return_value.exists.return_value = False
+            _stub_attachment_for_base(MockAttach, has_datasheet=False)
 
             result = mouser_plugin._enrich_part(42, dry_run=True)
 
@@ -434,7 +442,6 @@ class TestEnrichPreview:
         mock_dl.assert_not_called()
 
     def test_preview_does_not_save_datasheet(self, mouser_plugin: MouserImportPlugin) -> None:
-        part = _make_part(link="")
         with (
             patch(_PT_PART) as MockPart,
             patch(_PT_SP) as MockSP,
@@ -442,31 +449,7 @@ class TestEnrichPreview:
             patch(_PT_CT) as MockContentType,
             patch(_PT_TMPL) as MockTmpl,
             patch(_PT_PARAM) as MockParam,
-            patch(self._DL_PATCH),
-            patch.object(mouser_plugin, "get_import_data", return_value=_FRESH_DATA),
-        ):
-            MockPart.DoesNotExist = Exception
-            MockPart.objects.get.return_value = part
-            MockContentType.objects.get_for_model.return_value = "ct"
-            _stub_qs_for_sp(MockSP, _make_supplier_part())
-            _stub_pb_qs(MockPB, [])
-            MockTmpl.objects.get_or_create.return_value = (MagicMock(), True)
-            MockParam.objects.filter.return_value.exists.return_value = False
-
-            result = mouser_plugin._enrich_part(42, dry_run=True)
-
-        assert "datasheet_link" in result["updated"]
-        # part.save must NOT have been called in dry_run
-        part.save.assert_not_called()
-
-    def test_preview_does_not_create_price_breaks(self, mouser_plugin: MouserImportPlugin) -> None:
-        with (
-            patch(_PT_PART) as MockPart,
-            patch(_PT_SP) as MockSP,
-            patch(_PT_PB) as MockPB,
-            patch(_PT_CT) as MockContentType,
-            patch(_PT_TMPL) as MockTmpl,
-            patch(_PT_PARAM) as MockParam,
+            patch(_PT_ATTACH) as MockAttach,
             patch(self._DL_PATCH),
             patch.object(mouser_plugin, "get_import_data", return_value=_FRESH_DATA),
         ):
@@ -477,6 +460,34 @@ class TestEnrichPreview:
             _stub_pb_qs(MockPB, [])
             MockTmpl.objects.get_or_create.return_value = (MagicMock(), True)
             MockParam.objects.filter.return_value.exists.return_value = False
+            _stub_attachment_for_base(MockAttach, has_datasheet=False)
+
+            result = mouser_plugin._enrich_part(42, dry_run=True)
+
+        assert "datasheet_link" in result["updated"]
+        # Attachment must NOT have been created in dry_run
+        MockAttach.objects.create.assert_not_called()
+
+    def test_preview_does_not_create_price_breaks(self, mouser_plugin: MouserImportPlugin) -> None:
+        with (
+            patch(_PT_PART) as MockPart,
+            patch(_PT_SP) as MockSP,
+            patch(_PT_PB) as MockPB,
+            patch(_PT_CT) as MockContentType,
+            patch(_PT_TMPL) as MockTmpl,
+            patch(_PT_PARAM) as MockParam,
+            patch(_PT_ATTACH) as MockAttach,
+            patch(self._DL_PATCH),
+            patch.object(mouser_plugin, "get_import_data", return_value=_FRESH_DATA),
+        ):
+            MockPart.DoesNotExist = Exception
+            MockPart.objects.get.return_value = _make_part()
+            MockContentType.objects.get_for_model.return_value = "ct"
+            _stub_qs_for_sp(MockSP, _make_supplier_part())
+            _stub_pb_qs(MockPB, [])
+            MockTmpl.objects.get_or_create.return_value = (MagicMock(), True)
+            MockParam.objects.filter.return_value.exists.return_value = False
+            _stub_attachment_for_base(MockAttach, has_datasheet=False)
 
             result = mouser_plugin._enrich_part(42, dry_run=True)
 
@@ -492,6 +503,7 @@ class TestEnrichPreview:
             patch(_PT_CT) as MockContentType,
             patch(_PT_TMPL) as MockTmpl,
             patch(_PT_PARAM) as MockParam,
+            patch(_PT_ATTACH) as MockAttach,
             patch(self._DL_PATCH),
             patch.object(mouser_plugin, "get_import_data", return_value=_FRESH_DATA),
         ):
@@ -502,6 +514,7 @@ class TestEnrichPreview:
             _stub_pb_qs(MockPB, [1, 10])
             MockTmpl.objects.get_or_create.return_value = (MagicMock(), True)
             MockParam.objects.filter.return_value.exists.return_value = False
+            _stub_attachment_for_base(MockAttach, has_datasheet=False)
 
             result = mouser_plugin._enrich_part(42, dry_run=True)
 
@@ -566,6 +579,7 @@ _SVC_CT = "django.contrib.contenttypes.models.ContentType"
 _SVC_TMPL = "common.models.ParameterTemplate"
 _SVC_PARAM = "common.models.Parameter"
 _SVC_DL = "inventree_import_plugin.services.enrich._download_and_set_image"
+_SVC_ATTACH = "common.models.Attachment"
 
 
 class _MockProviderAdapter:
@@ -612,10 +626,37 @@ def _svc_stub_pb_qs(mock_pb_cls, existing):
     mock_pb_cls.objects.filter.return_value = qs
 
 
+def _stub_attachment(mock_attach_cls, *, has_datasheet=False, existing_link=None):
+    """Wire Attachment.objects.filter(...).exists() and .first() for datasheet checks."""
+    qs = MagicMock()
+    qs.exists.return_value = has_datasheet
+    if has_datasheet or existing_link:
+        att_mock = MagicMock(link=existing_link or "https://existing.com/ds.pdf")
+        qs.first.return_value = att_mock
+    else:
+        qs.first.return_value = None
+    mock_attach_cls.objects.filter.return_value = qs
+
+
+def _stub_attachment_for_base(mock_attach_cls, *, has_datasheet=False):
+    """Wire Attachment mock for base.py _enrich_part (uses filter + create pattern)."""
+    qs = MagicMock()
+    qs.exists.return_value = has_datasheet
+    mock_attach_cls.objects.filter.return_value = qs
+
+
 class TestEnrichPartForProviderDiff:
     """Test enrich_part_for_provider returns structured diff in preview mode."""
 
-    def _run(self, *, dry_run=True, existing_pb_quantities=None, param_exists=False, part=None):
+    def _run(
+        self,
+        *,
+        dry_run=True,
+        existing_pb_quantities=None,
+        param_exists=False,
+        part=None,
+        has_datasheet_attachment=False,
+    ):
         from inventree_import_plugin.services.enrich import enrich_part_for_provider
 
         plugin = _MockCorePlugin()
@@ -630,6 +671,7 @@ class TestEnrichPartForProviderDiff:
             patch(_SVC_TMPL) as MockTmpl,
             patch(_SVC_PARAM) as MockParam,
             patch(_SVC_DL),
+            patch(_SVC_ATTACH) as MockAttach,
             patch.object(plugin, "get_import_data", return_value=_FRESH_DATA),
         ):
             MockPart.DoesNotExist = Exception
@@ -643,6 +685,8 @@ class TestEnrichPartForProviderDiff:
             MockParam.objects.filter.return_value.exists.return_value = param_exists
             existing_param = MagicMock(data="5V") if param_exists else None
             MockParam.objects.filter.return_value.first.return_value = existing_param
+
+            _stub_attachment(MockAttach, has_datasheet=has_datasheet_attachment)
 
             return enrich_part_for_provider(plugin, "test-provider", 42, dry_run=dry_run)
 
@@ -674,17 +718,19 @@ class TestEnrichPartForProviderDiff:
         image_diff = result["diff"]["image"]
         assert image_diff["current"] == "existing.jpg"
 
-    def test_diff_datasheet_when_part_has_no_link(self):
-        result = self._run(dry_run=True, part=_make_part(link=""))
+    def test_diff_datasheet_when_no_existing_attachment(self):
+        result = self._run(dry_run=True, has_datasheet_attachment=False)
         ds_diff = result["diff"]["datasheet"]
         assert ds_diff["field"] == "datasheet_link"
         assert ds_diff["current"] is None
         assert ds_diff["incoming"] == _FRESH_DATA.datasheet_url
 
-    def test_diff_datasheet_when_part_already_has_link(self):
-        result = self._run(dry_run=True, part=_make_part(link="https://old.com/ds.pdf"))
+    def test_diff_datasheet_when_attachment_already_exists(self):
+        result = self._run(dry_run=True, has_datasheet_attachment=True)
         ds_diff = result["diff"]["datasheet"]
-        assert ds_diff["current"] == "https://old.com/ds.pdf"
+        assert ds_diff["field"] == "datasheet_link"
+        # When attachment exists, current shows the existing link URL
+        assert ds_diff["current"] == "https://existing.com/ds.pdf"
 
     def test_diff_price_breaks_new(self):
         result = self._run(dry_run=True, existing_pb_quantities=[])

@@ -83,6 +83,9 @@ def _make_common_stubs() -> dict[str, types.ModuleType]:
         def first(self) -> None:
             return None
 
+        def create(self, **kwargs: object) -> object:
+            return object()
+
         def get_for_model(self, model: object) -> object:
             return object()
 
@@ -92,8 +95,12 @@ def _make_common_stubs() -> dict[str, types.ModuleType]:
     class Parameter:
         objects = _QuerySet()
 
+    class Attachment:
+        objects = _QuerySet()
+
     models_mod.ParameterTemplate = ParameterTemplate  # type: ignore[attr-defined]
     models_mod.Parameter = Parameter  # type: ignore[attr-defined]
+    models_mod.Attachment = Attachment  # type: ignore[attr-defined]
     common_mod.models = models_mod  # type: ignore[attr-defined]
 
     return {"common": common_mod, "common.models": models_mod}

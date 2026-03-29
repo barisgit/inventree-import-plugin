@@ -262,14 +262,31 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
         else:
             skipped.append("image")
 
-        # Datasheet link — stored as part.link; only fill if empty
-        if fresh.datasheet_url and not part.link:
+        # Datasheet link — stored as an external-link Part attachment
+        from common.models import Attachment
+
+        _ds_comment = "Datasheet (supplier)"
+        _has_ds = Attachment.objects.filter(
+            model_type="part", model_id=part.pk, comment=_ds_comment
+        ).exists()
+
+        if fresh.datasheet_url and not _has_ds:
             if dry_run:
                 updated.append("datasheet_link")
             else:
-                part.link = fresh.datasheet_url
-                part.save(update_fields=["link"])
-                updated.append("datasheet_link")
+                try:
+                    Attachment.objects.create(
+                        model_type="part",
+                        model_id=part.pk,
+                        link=fresh.datasheet_url,
+                        comment=_ds_comment,
+                    )
+                    updated.append("datasheet_link")
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to create datasheet attachment for part %s: %s", part_id, exc
+                    )
+                    errors.append(f"datasheet_link: {exc}")
         else:
             skipped.append("datasheet_link")
 

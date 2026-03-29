@@ -186,29 +186,34 @@ function parseResultKeys(result: EnrichResult): ParsedSections {
 
 function buildAssetItems(result: EnrichResult): RichAssetItem[] {
   const diff = result.diff;
+  const updatedSet = new Set(result.updated);
+  const skippedSet = new Set(result.skipped);
+
   if (!diff) {
     const sections = parseResultKeys(result);
     return sections.assets.map((item) => ({ ...item, currentValue: null, incomingValue: null }));
   }
   const items: RichAssetItem[] = [];
   if (diff.image) {
+    const status: ItemStatus = updatedSet.has('image') ? 'update'
+      : skippedSet.has('image') ? 'skip'
+      : 'skip';
     items.push({
       key: 'image',
       label: 'Part image',
-      status: diff.image.incoming && !diff.image.current ? 'update'
-        : diff.image.incoming && diff.image.current ? 'update'
-        : 'skip',
+      status,
       currentValue: diff.image.current,
       incomingValue: diff.image.incoming,
     });
   }
   if (diff.datasheet) {
+    const status: ItemStatus = updatedSet.has('datasheet_link') ? 'update'
+      : skippedSet.has('datasheet_link') ? 'skip'
+      : 'skip';
     items.push({
       key: 'datasheet_link',
       label: 'Datasheet link',
-      status: diff.datasheet.incoming && !diff.datasheet.current ? 'update'
-        : diff.datasheet.incoming && diff.datasheet.current ? 'update'
-        : 'skip',
+      status,
       currentValue: diff.datasheet.current,
       incomingValue: diff.datasheet.incoming,
     });
@@ -284,22 +289,34 @@ function SectionHeader({ label, count }: { label: string; count: number }) {
   );
 }
 
-/** Renders a truncated link or "None" for diff values. */
+/** Renders a clickable truncated link or "None" for diff values. */
 function DiffValue({ value, side }: { value: string | null; side: 'current' | 'incoming' }) {
   if (value == null) {
     return <Text size="xs" c="dimmed" fs="italic">None</Text>;
   }
   const isUrl = value.startsWith('http');
-  const display = value.length > 50 ? value.slice(0, 47) + '...' : value;
+  const display = value.length > 60 ? value.slice(0, 57) + '...' : value;
   const color = side === 'incoming' ? 'green.8' : 'dimmed';
   if (isUrl) {
     return (
-      <Tooltip label={value} openDelay={300}>
-        <Text size="xs" c={color} truncate="end" maw={180}>{display}</Text>
+      <Tooltip label={value} openDelay={300} maw={400}>
+        <Text
+          component="a"
+          href={value}
+          target="_blank"
+          rel="noopener noreferrer"
+          size="xs"
+          c={color}
+          truncate="end"
+          maw={320}
+          style={{ wordBreak: 'break-all', textDecoration: 'underline', cursor: 'pointer' }}
+        >
+          {display}
+        </Text>
       </Tooltip>
     );
   }
-  return <Text size="xs" c={color}>{display}</Text>;
+  return <Text size="xs" c={color} style={{ wordBreak: 'break-word' }}>{display}</Text>;
 }
 
 function AssetRows({ items }: { items: RichAssetItem[] }) {
@@ -696,7 +713,7 @@ function EnrichPanel({ context }: { context: InvenTreePluginContext }) {
         opened={previewLoading || previewResult !== null}
         onClose={() => { if (!previewLoading && !applyLoading) setPreviewResult(null); }}
         title={previewResult ? `${previewResult.provider_name} preview` : 'Loading preview'}
-        size="lg"
+        size="xl"
       >
         {previewLoading && (
           <Group><Loader size="sm" /><Text>Loading preview...</Text></Group>

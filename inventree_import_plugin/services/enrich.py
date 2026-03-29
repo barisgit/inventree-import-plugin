@@ -12,6 +12,44 @@ from inventree_import_plugin.providers import get_provider_adapters
 
 logger = logging.getLogger(__name__)
 
+DATASHEET_ATTACHMENT_COMMENT = "Datasheet (supplier)"
+"""Stable comment used to tag and identify datasheet link attachments."""
+
+
+def _has_datasheet_attachment(part: Any) -> bool:
+    """Check whether the part already has a datasheet link attachment."""
+    from common.models import Attachment
+
+    return Attachment.objects.filter(
+        model_type="part",
+        model_id=part.pk,
+        comment=DATASHEET_ATTACHMENT_COMMENT,
+    ).exists()
+
+
+def _get_existing_datasheet_link(part: Any) -> str | None:
+    """Return the link URL of an existing datasheet attachment, or None."""
+    from common.models import Attachment
+
+    att = Attachment.objects.filter(
+        model_type="part",
+        model_id=part.pk,
+        comment=DATASHEET_ATTACHMENT_COMMENT,
+    ).first()
+    return getattr(att, "link", None) if att else None
+
+
+def _create_datasheet_attachment(part: Any, datasheet_url: str) -> None:
+    """Create an external-link attachment on the part for the datasheet URL."""
+    from common.models import Attachment
+
+    Attachment.objects.create(
+        model_type="part",
+        model_id=part.pk,
+        link=datasheet_url,
+        comment=DATASHEET_ATTACHMENT_COMMENT,
+    )
+
 
 def get_provider_state(plugin: Any, part_id: int) -> dict[str, Any]:
     from company.models import SupplierPart
@@ -90,18 +128,19 @@ def _build_diff(
     else:
         image_diff = {"field": "image", "current": None, "incoming": fresh.image_url or None}
 
-    # Datasheet diff
+    # Datasheet diff (external-link attachment)
+    existing_ds_link = _get_existing_datasheet_link(part)
     datasheet_diff: dict[str, Any] | None = None
-    if fresh.datasheet_url and not part.link:
+    if fresh.datasheet_url and not existing_ds_link:
         datasheet_diff = {
             "field": "datasheet_link",
             "current": None,
             "incoming": fresh.datasheet_url,
         }
-    elif part.link:
+    elif existing_ds_link:
         datasheet_diff = {
             "field": "datasheet_link",
-            "current": part.link,
+            "current": existing_ds_link,
             "incoming": fresh.datasheet_url or None,
         }
     else:
@@ -246,13 +285,18 @@ def enrich_part_for_provider(
     else:
         skipped.append("image")
 
-    if fresh.datasheet_url and not part.link:
+    if fresh.datasheet_url and not _has_datasheet_attachment(part):
         if dry_run:
             updated.append("datasheet_link")
         else:
-            part.link = fresh.datasheet_url
-            part.save(update_fields=["link"])
-            updated.append("datasheet_link")
+            try:
+                _create_datasheet_attachment(part, fresh.datasheet_url)
+                updated.append("datasheet_link")
+            except Exception as exc:
+                logger.warning(
+                    "Failed to create datasheet attachment for part %s: %s", part_id, exc
+                )
+                errors.append(f"datasheet_link: {exc}")
     else:
         skipped.append("datasheet_link")
 
