@@ -847,6 +847,7 @@ function EnrichPanel({ context }: { context: InvenTreePluginContext }) {
   const [previewResult, setPreviewResult] = useState<EnrichResult | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [applyLoading, setApplyLoading] = useState(false);
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
 
   const fetchUrl = useMemo(() => {
     if (!pluginSlug || !partId) return null;
@@ -884,6 +885,7 @@ function EnrichPanel({ context }: { context: InvenTreePluginContext }) {
         pluginApi(pluginSlug, `part/${partId}/preview/${provider.slug}/`)
       );
       setPreviewResult(response.data);
+      setSelectedKeys(getSelectableResultKeys(response.data));
     } catch (err) {
       setPreviewResult({
         provider_slug: provider.slug,
@@ -893,19 +895,32 @@ function EnrichPanel({ context }: { context: InvenTreePluginContext }) {
         skipped: [],
         errors: [String(err)],
       });
+      setSelectedKeys(new Set());
     } finally {
       setPreviewLoading(false);
     }
   };
 
+  const toggleKey = useCallback((key: string) => {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
   const applyProvider = async () => {
     if (!previewResult) return;
     setApplyLoading(true);
     try {
+      const expandedKeys = expandSelectedKeysForApply(previewResult, selectedKeys);
       const response = await context.api.post<EnrichResult>(
-        pluginApi(pluginSlug, `part/${partId}/apply/${previewResult.provider_slug}/`)
+        pluginApi(pluginSlug, `part/${partId}/apply/${previewResult.provider_slug}/`),
+        { selected_keys: expandedKeys }
       );
       setPreviewResult(response.data);
+      setSelectedKeys(new Set());
       if (fetchUrl) {
         const stateResponse = await context.api.get<ProviderStateResponse>(fetchUrl);
         setProviderState(stateResponse.data);
@@ -981,7 +996,11 @@ function EnrichPanel({ context }: { context: InvenTreePluginContext }) {
         )}
         {previewResult && !previewLoading && (
           <Stack gap="md">
-            <StructuredPreview result={previewResult} />
+            <BulkStructuredPreview
+              result={previewResult}
+              selectedKeys={selectedKeys}
+              onToggleKey={toggleKey}
+            />
             <Group justify="flex-end">
               <Button variant="default" onClick={() => setPreviewResult(null)} disabled={applyLoading}>
                 Close
@@ -989,9 +1008,9 @@ function EnrichPanel({ context }: { context: InvenTreePluginContext }) {
               <Button
                 onClick={() => { void applyProvider(); }}
                 loading={applyLoading}
-                disabled={previewResult.updated.length === 0}
+                disabled={selectedKeys.size === 0}
               >
-                Apply changes
+                Apply selected ({selectedKeys.size})
               </Button>
             </Group>
           </Stack>

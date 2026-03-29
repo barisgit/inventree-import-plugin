@@ -35,7 +35,14 @@ def build_urlpatterns(plugin: Any) -> list[Any]:
 
     class _ApplyView(_BaseRoleView):
         def post(inner_self, request: Any, part_id: int, provider_slug: str) -> Any:  # noqa: N805
-            return Response(enrich_part_for_provider(plugin, provider_slug, part_id, dry_run=False))
+            selected_keys = request.data.get("selected_keys")
+            if selected_keys is not None:
+                selected_keys = set(selected_keys)
+            return Response(
+                enrich_part_for_provider(
+                    plugin, provider_slug, part_id, dry_run=False, selected_keys=selected_keys
+                )
+            )
 
     class _BulkPreviewView(_BaseRoleView):
         def post(inner_self, request: Any) -> Any:  # noqa: N805
