@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 from inventree_import_plugin import PLUGIN_VERSION
@@ -169,6 +171,19 @@ class InvenTreeImportPlugin(BaseImportPlugin):
         return supplier_part
 
     _PANEL_TARGET_MODELS = {"part", "partcategory"}
+    _MANIFEST_PATH = Path(__file__).parent / "static" / ".vite" / "manifest.json"
+    _MANIFEST_ENTRY_KEY = "src/EnrichPanelV2.tsx"
+    _FALLBACK_ASSET = "EnrichPanelV2.js"
+
+    @classmethod
+    def _resolve_enrich_panel_asset(cls) -> str:
+        """Resolve the hashed JS filename from the Vite manifest, with fallback."""
+        try:
+            with cls._MANIFEST_PATH.open("r", encoding="utf-8") as f:
+                manifest = json.load(f)
+            return manifest[cls._MANIFEST_ENTRY_KEY]["file"]
+        except (OSError, KeyError, json.JSONDecodeError):
+            return cls._FALLBACK_ASSET
 
     def get_ui_panels(
         self, request: Any, context: dict[str, Any] | None = None, **kwargs: Any
@@ -186,13 +201,14 @@ class InvenTreeImportPlugin(BaseImportPlugin):
             title = "Enrich Part"
             description = "Preview and apply updates from configured suppliers"
 
+        asset = self._resolve_enrich_panel_asset()
         return [
             {
                 "key": "supplier-enrich",
                 "title": title,
                 "description": description,
                 "icon": "ti:refresh-dot:outline",
-                "source": self.plugin_static_file("EnrichPanelV2.js:renderEnrichPanel"),
+                "source": self.plugin_static_file(f"{asset}:renderEnrichPanel"),
                 "context": {"plugin_slug": self.SLUG},
             }
         ]
