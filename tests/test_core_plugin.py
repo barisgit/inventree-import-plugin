@@ -48,10 +48,10 @@ class TestCombinedPluginUi:
         panels = plugin.get_ui_panels(None, {"target_model": "part"})
 
         assert len(panels) == 1
-        assert panels[0]["key"] == "supplier-enrich"
+        assert panels[0]["key"] == "supplier-enrich-v3"
         assert panels[0]["title"] == "Enrich Part"
         assert panels[0]["context"]["plugin_slug"] == plugin.SLUG
-        assert panels[0]["source"] == "static/EnrichPanelV2.js:renderEnrichPanel"
+        assert panels[0]["source"] == "static/EnrichPanelV3.js:renderEnrichPanelV3"
 
     def test_partcategory_panel_context(self) -> None:
         plugin = InvenTreeImportPlugin()
@@ -60,10 +60,10 @@ class TestCombinedPluginUi:
         panels = plugin.get_ui_panels(None, {"target_model": "partcategory"})
 
         assert len(panels) == 1
-        assert panels[0]["key"] == "supplier-enrich"
+        assert panels[0]["key"] == "supplier-enrich-v3"
         assert panels[0]["title"] == "Enrich Category Parts"
         assert panels[0]["context"]["plugin_slug"] == plugin.SLUG
-        assert panels[0]["source"] == "static/EnrichPanelV2.js:renderEnrichPanel"
+        assert panels[0]["source"] == "static/EnrichPanelV3.js:renderEnrichPanelV3"
 
     def test_panel_returns_empty_for_unsupported_model(self) -> None:
         plugin = InvenTreeImportPlugin()

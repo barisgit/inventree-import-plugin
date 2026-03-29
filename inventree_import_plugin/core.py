@@ -165,11 +165,11 @@ class InvenTreeImportPlugin(BaseImportPlugin):
 
         return [
             {
-                "key": "supplier-enrich",
+                "key": "supplier-enrich-v3",
                 "title": title,
                 "description": description,
                 "icon": "ti:refresh-dot:outline",
-                "source": self.plugin_static_file("EnrichPanelV2.js:renderEnrichPanel"),
+                "source": self.plugin_static_file("EnrichPanelV3.js:renderEnrichPanelV3"),
                 "context": {"plugin_slug": self.SLUG},
             }
         ]
