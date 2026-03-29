@@ -22,5 +22,9 @@ class SearchResult:
     id: str | None = None
     existing_part: Any | None = None
 
+    def __post_init__(self) -> None:
+        if not self.id:
+            self.id = self.sku
+
 
 __all__ = ["SearchResult", "Supplier"]

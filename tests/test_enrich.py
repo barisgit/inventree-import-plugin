@@ -712,11 +712,13 @@ class TestEnrichPartForProviderDiff:
         assert image_diff["field"] == "image"
         assert image_diff["current"] is None
         assert image_diff["incoming"] == _FRESH_DATA.image_url
+        assert image_diff["status"] == "new"
 
     def test_diff_image_when_part_already_has_image(self):
         result = self._run(dry_run=True, part=_make_part(image="existing.jpg"))
         image_diff = result["diff"]["image"]
         assert image_diff["current"] == "existing.jpg"
+        assert image_diff["status"] == "skipped"
 
     def test_diff_datasheet_when_no_existing_attachment(self):
         result = self._run(dry_run=True, has_datasheet_attachment=False)
@@ -724,6 +726,7 @@ class TestEnrichPartForProviderDiff:
         assert ds_diff["field"] == "datasheet_link"
         assert ds_diff["current"] is None
         assert ds_diff["incoming"] == _FRESH_DATA.datasheet_url
+        assert ds_diff["status"] == "new"
 
     def test_diff_datasheet_when_attachment_already_exists(self):
         result = self._run(dry_run=True, has_datasheet_attachment=True)
@@ -731,6 +734,7 @@ class TestEnrichPartForProviderDiff:
         assert ds_diff["field"] == "datasheet_link"
         # When attachment exists, current shows the existing link URL
         assert ds_diff["current"] == "https://existing.com/ds.pdf"
+        assert ds_diff["status"] == "skipped"
 
     def test_diff_price_breaks_new(self):
         result = self._run(dry_run=True, existing_pb_quantities=[])

@@ -92,7 +92,9 @@ class TestGetSearchResultsProductCodeFallback:
     )
 
     def test_product_code_uses_detail_api(self, plugin: LCSCImportPlugin) -> None:
-        with patch("inventree_import_plugin.lcsc_plugin.fetch_lcsc_part", return_value=self._part) as mock_fetch:
+        with patch(
+            "inventree_import_plugin.lcsc_plugin.fetch_lcsc_part", return_value=self._part
+        ) as mock_fetch:
             results = plugin.get_search_results("lcsc", "C5248079")
         mock_fetch.assert_called_once_with("C5248079")
         assert len(results) == 1
@@ -109,19 +111,26 @@ class TestGetSearchResultsProductCodeFallback:
         assert r.image_url == "https://example.com/img.jpg"
 
     def test_lowercase_c_prefix_also_triggers_fallback(self, plugin: LCSCImportPlugin) -> None:
-        with patch("inventree_import_plugin.lcsc_plugin.fetch_lcsc_part", return_value=self._part) as mock_fetch:
+        with patch(
+            "inventree_import_plugin.lcsc_plugin.fetch_lcsc_part", return_value=self._part
+        ) as mock_fetch:
             results = plugin.get_search_results("lcsc", "c5248079")
         mock_fetch.assert_called_once_with("c5248079")
         assert results[0].exact is True
 
     def test_fetch_error_returns_empty_list(self, plugin: LCSCImportPlugin) -> None:
-        with patch("inventree_import_plugin.lcsc_plugin.fetch_lcsc_part", side_effect=RuntimeError("network error")):
+        with patch(
+            "inventree_import_plugin.lcsc_plugin.fetch_lcsc_part",
+            side_effect=RuntimeError("network error"),
+        ):
             results = plugin.get_search_results("lcsc", "C5248079")
         assert results == []
 
     def test_non_product_code_uses_keyword_search(self, plugin: LCSCImportPlugin) -> None:
         with (
-            patch("inventree_import_plugin.lcsc_plugin.search_lcsc", return_value=self._raw) as mock_search,
+            patch(
+                "inventree_import_plugin.lcsc_plugin.search_lcsc", return_value=self._raw
+            ) as mock_search,
             patch("inventree_import_plugin.lcsc_plugin.fetch_lcsc_part") as mock_fetch,
         ):
             results = plugin.get_search_results("lcsc", "LM358")
@@ -132,6 +141,38 @@ class TestGetSearchResultsProductCodeFallback:
     _raw = [
         {"productCode": "C12345", "productModel": "LM358", "productIntroEn": "Dual op-amp"},
     ]
+
+
+class TestSearchResultId:
+    """SearchResult.id must always be usable as part_import_id (never null)."""
+
+    def test_keyword_search_id_defaults_to_sku(self, plugin: LCSCImportPlugin) -> None:
+        raw = [{"productCode": "C12345", "productModel": "LM358", "productIntroEn": "op-amp"}]
+        with patch("inventree_import_plugin.lcsc_plugin.search_lcsc", return_value=raw):
+            results = plugin.get_search_results("lcsc", "LM358")
+        assert results[0].id == "C12345"
+
+    def test_product_code_search_id_defaults_to_sku(self, plugin: LCSCImportPlugin) -> None:
+        part = PartData(
+            sku="C5248079",
+            name="MOSFET",
+            description="N-channel",
+        )
+        with patch("inventree_import_plugin.lcsc_plugin.fetch_lcsc_part", return_value=part):
+            results = plugin.get_search_results("lcsc", "C5248079")
+        assert results[0].id == "C5248079"
+
+    def test_explicit_id_preserved(self) -> None:
+        result = SearchResult(sku="C12345", name="LM358", exact=False, id="custom-id")
+        assert result.id == "custom-id"
+
+    def test_empty_string_id_falls_back_to_sku(self) -> None:
+        result = SearchResult(sku="C12345", name="LM358", exact=False, id="")
+        assert result.id == "C12345"
+
+    def test_none_id_falls_back_to_sku(self) -> None:
+        result = SearchResult(sku="C12345", name="LM358", exact=False)
+        assert result.id == "C12345"
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +193,9 @@ _SAMPLE_PART = PartData(
 
 class TestGetImportData:
     def test_returns_part_data(self, plugin: LCSCImportPlugin) -> None:
-        with patch("inventree_import_plugin.lcsc_plugin.fetch_lcsc_part", return_value=_SAMPLE_PART):
+        with patch(
+            "inventree_import_plugin.lcsc_plugin.fetch_lcsc_part", return_value=_SAMPLE_PART
+        ):
             part = plugin.get_import_data("lcsc", "C12345")
         assert isinstance(part, PartData)
         assert part.sku == "C12345"
@@ -174,7 +217,9 @@ class TestGetImportData:
         assert part.image_url == ""
 
     def test_passes_part_number_to_fetch(self, plugin: LCSCImportPlugin) -> None:
-        with patch("inventree_import_plugin.lcsc_plugin.fetch_lcsc_part", return_value=_SAMPLE_PART) as mock:
+        with patch(
+            "inventree_import_plugin.lcsc_plugin.fetch_lcsc_part", return_value=_SAMPLE_PART
+        ) as mock:
             plugin.get_import_data("lcsc", "C99999")
         mock.assert_called_once_with("C99999")
 
@@ -193,6 +238,7 @@ class TestPluginMetadata:
 
     def test_version(self) -> None:
         from inventree_import_plugin import PLUGIN_VERSION
+
         assert LCSCImportPlugin.VERSION == PLUGIN_VERSION
 
     def test_download_images_default_true(self) -> None:

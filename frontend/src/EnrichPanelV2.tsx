@@ -46,6 +46,7 @@ type DiffFieldEntry = {
   field: string;
   current: string | null;
   incoming: string | null;
+  status: 'new' | 'skipped';
 };
 
 type DiffParameterRow = {
@@ -186,8 +187,6 @@ function parseResultKeys(result: EnrichResult): ParsedSections {
 
 function buildAssetItems(result: EnrichResult): RichAssetItem[] {
   const diff = result.diff;
-  const updatedSet = new Set(result.updated);
-  const skippedSet = new Set(result.skipped);
 
   if (!diff) {
     const sections = parseResultKeys(result);
@@ -195,9 +194,7 @@ function buildAssetItems(result: EnrichResult): RichAssetItem[] {
   }
   const items: RichAssetItem[] = [];
   if (diff.image) {
-    const status: ItemStatus = updatedSet.has('image') ? 'update'
-      : skippedSet.has('image') ? 'skip'
-      : 'skip';
+    const status: ItemStatus = diff.image.status === 'skipped' ? 'skip' : 'update';
     items.push({
       key: 'image',
       label: 'Part image',
@@ -207,9 +204,7 @@ function buildAssetItems(result: EnrichResult): RichAssetItem[] {
     });
   }
   if (diff.datasheet) {
-    const status: ItemStatus = updatedSet.has('datasheet_link') ? 'update'
-      : skippedSet.has('datasheet_link') ? 'skip'
-      : 'skip';
+    const status: ItemStatus = diff.datasheet.status === 'skipped' ? 'skip' : 'update';
     items.push({
       key: 'datasheet_link',
       label: 'Datasheet link',
@@ -513,14 +508,14 @@ function CompactStructuredPreview({ result }: { result: EnrichResult }) {
       {diff ? (
         /* Richer compact details when diff payload is present */
         <>
-          {diff.image?.incoming && (
+          {diff.image && diff.image.status !== 'skipped' && (
             <Text size="xs" c="green.7">
-              Image: {diff.image.current ?? 'none'} → {diff.image.incoming.length > 40 ? `${diff.image.incoming.slice(0, 37)}...` : diff.image.incoming}
+              Image: {diff.image.current ?? 'none'} → {diff.image.incoming && diff.image.incoming.length > 40 ? `${diff.image.incoming.slice(0, 37)}...` : diff.image.incoming}
             </Text>
           )}
-          {diff.datasheet?.incoming && (
+          {diff.datasheet && diff.datasheet.status !== 'skipped' && (
             <Text size="xs" c="green.7">
-              Datasheet: {diff.datasheet.current ?? 'none'} → {diff.datasheet.incoming.length > 40 ? `${diff.datasheet.incoming.slice(0, 37)}...` : diff.datasheet.incoming}
+              Datasheet: {diff.datasheet.current ?? 'none'} → {diff.datasheet.incoming && diff.datasheet.incoming.length > 40 ? `${diff.datasheet.incoming.slice(0, 37)}...` : diff.datasheet.incoming}
             </Text>
           )}
           {diff.parameters.filter((p) => p.status !== 'skipped').length > 0 && (

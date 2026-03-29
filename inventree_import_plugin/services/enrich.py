@@ -118,15 +118,26 @@ def _build_diff(
     # Image diff
     image_diff: dict[str, Any] | None = None
     if fresh.image_url and not part.image:
-        image_diff = {"field": "image", "current": None, "incoming": fresh.image_url}
+        image_diff = {
+            "field": "image",
+            "current": None,
+            "incoming": fresh.image_url,
+            "status": "new",
+        }
     elif part.image:
         image_diff = {
             "field": "image",
             "current": str(part.image),
             "incoming": fresh.image_url or None,
+            "status": "skipped",
         }
     else:
-        image_diff = {"field": "image", "current": None, "incoming": fresh.image_url or None}
+        image_diff = {
+            "field": "image",
+            "current": None,
+            "incoming": fresh.image_url or None,
+            "status": "skipped" if not fresh.image_url else "new",
+        }
 
     # Datasheet diff (external-link attachment)
     existing_ds_link = _get_existing_datasheet_link(part)
@@ -136,18 +147,21 @@ def _build_diff(
             "field": "datasheet_link",
             "current": None,
             "incoming": fresh.datasheet_url,
+            "status": "new",
         }
     elif existing_ds_link:
         datasheet_diff = {
             "field": "datasheet_link",
             "current": existing_ds_link,
             "incoming": fresh.datasheet_url or None,
+            "status": "skipped",
         }
     else:
         datasheet_diff = {
             "field": "datasheet_link",
             "current": None,
             "incoming": fresh.datasheet_url or None,
+            "status": "skipped" if not fresh.datasheet_url else "new",
         }
 
     # Price break rows

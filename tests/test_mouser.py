@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests as _requests
 
+from inventree_import_plugin.base import SearchResult
 from inventree_import_plugin.models import PartData, PartParameter, PriceBreak
 from inventree_import_plugin.suppliers.mouser import (
     _map_part_data,
@@ -276,3 +277,38 @@ class TestFetchMouserPart:
 
         assert part is not None
         assert part.sku == "595-SN74HC595N"
+
+
+# ---------------------------------------------------------------------------
+# SearchResult.id fallback
+# ---------------------------------------------------------------------------
+
+
+class TestSearchResultId:
+    """SearchResult.id must always be usable as part_import_id (never null)."""
+
+    def test_search_results_have_id_matching_sku(self) -> None:
+        results = [
+            SearchResult(
+                sku=row.sku,
+                name=row.name,
+                exact=False,
+                description=row.description,
+                link=row.link,
+                image_url=row.image_url,
+            )
+            for row in [_map_part_data(MOUSER_PART_FIXTURE)]
+        ]
+        assert results[0].id == "595-SN74HC595N"
+
+    def test_explicit_id_preserved(self) -> None:
+        result = SearchResult(sku="595-SN74HC595N", name="SN74HC595N", exact=False, id="custom")
+        assert result.id == "custom"
+
+    def test_empty_string_id_falls_back_to_sku(self) -> None:
+        result = SearchResult(sku="595-SN74HC595N", name="SN74HC595N", exact=False, id="")
+        assert result.id == "595-SN74HC595N"
+
+    def test_none_id_falls_back_to_sku(self) -> None:
+        result = SearchResult(sku="595-SN74HC595N", name="SN74HC595N", exact=False)
+        assert result.id == "595-SN74HC595N"

@@ -174,6 +174,10 @@ def _make_plugin_stubs() -> dict[str, types.ModuleType]:
         id: str | None = None
         existing_part: object = None
 
+        def __post_init__(self) -> None:
+            if not self.id:
+                self.id = self.sku
+
     class UrlsMixin:
         """Minimal stub — satisfies UrlsMixin import in base.py."""
 
