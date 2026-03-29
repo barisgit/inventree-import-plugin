@@ -63,6 +63,99 @@ def get_provider_state(plugin: Any, part_id: int) -> dict[str, Any]:
     return {"part_id": part_id, "providers": providers}
 
 
+def _build_diff(
+    *,
+    dry_run: bool,
+    part: Any,
+    fresh: Any,
+    existing_quantities: set[int],
+    parameter_model: Any,
+    parameter_template_model: Any,
+    content_type_model: Any,
+) -> dict[str, Any] | None:
+    """Build structured diff data for preview responses. Returns None for apply (non-dry-run)."""
+    if not dry_run:
+        return None
+
+    # Image diff
+    image_diff: dict[str, Any] | None = None
+    if fresh.image_url and not part.image:
+        image_diff = {"field": "image", "current": None, "incoming": fresh.image_url}
+    elif part.image:
+        image_diff = {
+            "field": "image",
+            "current": str(part.image),
+            "incoming": fresh.image_url or None,
+        }
+    else:
+        image_diff = {"field": "image", "current": None, "incoming": fresh.image_url or None}
+
+    # Datasheet diff
+    datasheet_diff: dict[str, Any] | None = None
+    if fresh.datasheet_url and not part.link:
+        datasheet_diff = {
+            "field": "datasheet_link",
+            "current": None,
+            "incoming": fresh.datasheet_url,
+        }
+    elif part.link:
+        datasheet_diff = {
+            "field": "datasheet_link",
+            "current": part.link,
+            "incoming": fresh.datasheet_url or None,
+        }
+    else:
+        datasheet_diff = {
+            "field": "datasheet_link",
+            "current": None,
+            "incoming": fresh.datasheet_url or None,
+        }
+
+    # Price break rows
+    price_break_rows: list[dict[str, Any]] = []
+    for pb in fresh.price_breaks:
+        exists = pb.quantity in existing_quantities
+        price_break_rows.append(
+            {
+                "quantity": pb.quantity,
+                "incoming_price": pb.price,
+                "incoming_currency": pb.currency,
+                "status": "skipped" if exists else "new",
+            }
+        )
+
+    # Parameter rows
+    parameter_rows: list[dict[str, Any]] = []
+    for param in fresh.parameters:
+        template = parameter_template_model.objects.filter(name=param.name).first()
+        current_value = None
+        exists = False
+        if template is not None:
+            parameter_kwargs = _parameter_filter_kwargs(part, template, content_type_model)
+            existing_param = parameter_model.objects.filter(**parameter_kwargs).first()
+            if existing_param is not None:
+                current_value = getattr(existing_param, "data", None) or getattr(
+                    existing_param, "value", None
+                )
+                exists = True
+        parameter_rows.append(
+            {
+                "name": param.name,
+                "units": param.units,
+                "current": current_value,
+                "incoming": param.value,
+                "status": "skipped" if exists else "new",
+            }
+        )
+
+    return {
+        "image": image_diff,
+        "datasheet": datasheet_diff,
+        "price_breaks": price_break_rows,
+        "parameters": parameter_rows,
+    }
+
+
 def enrich_part_for_provider(
     plugin: Any, provider_slug: str, part_id: int, *, dry_run: bool = False
 ) -> dict[str, Any]:
@@ -81,14 +174,17 @@ def enrich_part_for_provider(
     except Part.DoesNotExist:
         return cast(
             dict[str, Any],
-            plugin._provider_result(provider_slug, part_id, [], [], [f"Part {part_id} not found"]),
+            plugin._provider_result(
+                provider_slug, part_id, [], [], [f"Part {part_id} not found"], diff=None
+            ),
         )
 
     try:
         supplier_company = plugin.get_supplier_company_for(provider_slug)
     except Exception as exc:
         return cast(
-            dict[str, Any], plugin._provider_result(provider_slug, part_id, [], [], [str(exc)])
+            dict[str, Any],
+            plugin._provider_result(provider_slug, part_id, [], [], [str(exc)], diff=None),
         )
 
     supplier_part = (
@@ -105,6 +201,7 @@ def enrich_part_for_provider(
                 [],
                 [],
                 ["No supplier part found for this provider"],
+                diff=None,
             ),
         )
 
@@ -115,7 +212,8 @@ def enrich_part_for_provider(
             "Failed to fetch provider data for %s/%s", provider_slug, supplier_part.SKU
         )
         return cast(
-            dict[str, Any], plugin._provider_result(provider_slug, part_id, [], [], [str(exc)])
+            dict[str, Any],
+            plugin._provider_result(provider_slug, part_id, [], [], [str(exc)], diff=None),
         )
 
     if fresh is None:
@@ -127,8 +225,13 @@ def enrich_part_for_provider(
                 [],
                 [],
                 [f"No data returned for SKU {supplier_part.SKU}"],
+                diff=None,
             ),
         )
+
+    existing_quantities: set[int] = set(
+        SupplierPriceBreak.objects.filter(part=supplier_part).values_list("quantity", flat=True)
+    )
 
     if fresh.image_url and not part.image:
         if dry_run:
@@ -153,9 +256,6 @@ def enrich_part_for_provider(
     else:
         skipped.append("datasheet_link")
 
-    existing_quantities: set[int] = set(
-        SupplierPriceBreak.objects.filter(part=supplier_part).values_list("quantity", flat=True)
-    )
     for price_break in fresh.price_breaks:
         key = f"price_break:{price_break.quantity}"
         if price_break.quantity in existing_quantities:
@@ -205,8 +305,19 @@ def enrich_part_for_provider(
         except Exception as exc:
             errors.append(f"parameter:{param.name}: {exc}")
 
+    diff = _build_diff(
+        dry_run=dry_run,
+        part=part,
+        fresh=fresh,
+        existing_quantities=existing_quantities,
+        parameter_model=parameter_model,
+        parameter_template_model=parameter_template_model,
+        content_type_model=content_type_model,
+    )
+
     return cast(
-        dict[str, Any], plugin._provider_result(provider_slug, part_id, updated, skipped, errors)
+        dict[str, Any],
+        plugin._provider_result(provider_slug, part_id, updated, skipped, errors, diff=diff),
     )
 
 

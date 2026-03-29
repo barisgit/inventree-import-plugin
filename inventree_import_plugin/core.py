@@ -250,9 +250,11 @@ class InvenTreeImportPlugin(BaseImportPlugin):
         updated: list[str],
         skipped: list[str],
         errors: list[str],
+        *,
+        diff: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         adapter = self._get_provider_adapter(provider_slug)
-        return {
+        result: dict[str, Any] = {
             "provider_slug": provider_slug,
             "provider_name": adapter.definition.name,
             "part_id": part_id,
@@ -260,6 +262,9 @@ class InvenTreeImportPlugin(BaseImportPlugin):
             "skipped": skipped,
             "errors": errors,
         }
+        if diff is not None:
+            result["diff"] = diff
+        return result
 
     def _parse_bulk_payload(self, request: Any) -> tuple[list[int], list[str]]:
         return parse_bulk_payload(self, request)

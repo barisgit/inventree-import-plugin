@@ -558,3 +558,176 @@ class TestDownloadAndSetImage:
         fn(part, "https://example.com/test.jpg")
 
         part.set_image_from_url.assert_called_once_with("https://example.com/test.jpg")
+
+
+# ---------------------------------------------------------------------------
+# enrich_part_for_provider (services/enrich.py) structured diff tests
+# ---------------------------------------------------------------------------
+
+# Patch targets for the services-level function.
+_SVC_PART = "part.models.Part"
+_SVC_SP = "company.models.SupplierPart"
+_SVC_PB = "company.models.SupplierPriceBreak"
+_SVC_CT = "django.contrib.contenttypes.models.ContentType"
+_SVC_TMPL = "common.models.ParameterTemplate"
+_SVC_PARAM = "common.models.Parameter"
+_SVC_DL = "inventree_import_plugin.services.enrich._download_and_set_image"
+
+
+class _MockProviderAdapter:
+    """Minimal adapter stub for _provider_result."""
+
+    class _Definition:
+        name = "TestProvider"
+        slug = "test-provider"
+
+    definition = _Definition()
+
+
+class _MockCorePlugin:
+    """Minimal plugin mock that has _provider_result and provider methods."""
+
+    def _provider_result(self, provider_slug, part_id, updated, skipped, errors, *, diff=None):
+        return {
+            "provider_slug": provider_slug,
+            "provider_name": "TestProvider",
+            "part_id": part_id,
+            "updated": updated,
+            "skipped": skipped,
+            "errors": errors,
+            **({"diff": diff} if diff is not None else {}),
+        }
+
+    def get_supplier_company_for(self, provider_slug):
+        return MagicMock()
+
+    def get_import_data(self, provider_slug, sku):
+        return _FRESH_DATA
+
+
+def _svc_stub_qs_for_sp(mock_sp_cls, sp_instance):
+    qs = MagicMock()
+    qs.select_related.return_value = qs
+    qs.first.return_value = sp_instance
+    mock_sp_cls.objects.filter.return_value = qs
+
+
+def _svc_stub_pb_qs(mock_pb_cls, existing):
+    qs = MagicMock()
+    qs.values_list.return_value = existing
+    mock_pb_cls.objects.filter.return_value = qs
+
+
+class TestEnrichPartForProviderDiff:
+    """Test enrich_part_for_provider returns structured diff in preview mode."""
+
+    def _run(self, *, dry_run=True, existing_pb_quantities=None, param_exists=False, part=None):
+        from inventree_import_plugin.services.enrich import enrich_part_for_provider
+
+        plugin = _MockCorePlugin()
+        _part = part or _make_part()
+        _sp = _make_supplier_part()
+
+        with (
+            patch(_SVC_PART) as MockPart,
+            patch(_SVC_SP) as MockSP,
+            patch(_SVC_PB) as MockPB,
+            patch(_SVC_CT) as MockContentType,
+            patch(_SVC_TMPL) as MockTmpl,
+            patch(_SVC_PARAM) as MockParam,
+            patch(_SVC_DL),
+            patch.object(plugin, "get_import_data", return_value=_FRESH_DATA),
+        ):
+            MockPart.DoesNotExist = Exception
+            MockPart.objects.get.return_value = _part
+            MockContentType.objects.get_for_model.return_value = "part-content-type"
+            _svc_stub_qs_for_sp(MockSP, _sp)
+            _svc_stub_pb_qs(MockPB, existing_pb_quantities or [])
+
+            template_mock = MagicMock()
+            MockTmpl.objects.get_or_create.return_value = (template_mock, True)
+            MockParam.objects.filter.return_value.exists.return_value = param_exists
+            existing_param = MagicMock(data="5V") if param_exists else None
+            MockParam.objects.filter.return_value.first.return_value = existing_param
+
+            return enrich_part_for_provider(plugin, "test-provider", 42, dry_run=dry_run)
+
+    def test_preview_includes_diff_key(self):
+        result = self._run(dry_run=True)
+        assert "diff" in result
+        assert "updated" in result
+        assert "skipped" in result
+        assert "errors" in result
+
+    def test_apply_does_not_include_diff(self):
+        result = self._run(dry_run=False)
+        assert "diff" not in result
+
+    def test_diff_has_expected_top_level_keys(self):
+        result = self._run(dry_run=True)
+        diff = result["diff"]
+        assert set(diff.keys()) == {"image", "datasheet", "price_breaks", "parameters"}
+
+    def test_diff_image_when_part_has_no_image(self):
+        result = self._run(dry_run=True, part=_make_part(image=""))
+        image_diff = result["diff"]["image"]
+        assert image_diff["field"] == "image"
+        assert image_diff["current"] is None
+        assert image_diff["incoming"] == _FRESH_DATA.image_url
+
+    def test_diff_image_when_part_already_has_image(self):
+        result = self._run(dry_run=True, part=_make_part(image="existing.jpg"))
+        image_diff = result["diff"]["image"]
+        assert image_diff["current"] == "existing.jpg"
+
+    def test_diff_datasheet_when_part_has_no_link(self):
+        result = self._run(dry_run=True, part=_make_part(link=""))
+        ds_diff = result["diff"]["datasheet"]
+        assert ds_diff["field"] == "datasheet_link"
+        assert ds_diff["current"] is None
+        assert ds_diff["incoming"] == _FRESH_DATA.datasheet_url
+
+    def test_diff_datasheet_when_part_already_has_link(self):
+        result = self._run(dry_run=True, part=_make_part(link="https://old.com/ds.pdf"))
+        ds_diff = result["diff"]["datasheet"]
+        assert ds_diff["current"] == "https://old.com/ds.pdf"
+
+    def test_diff_price_breaks_new(self):
+        result = self._run(dry_run=True, existing_pb_quantities=[])
+        pb_rows = result["diff"]["price_breaks"]
+        assert len(pb_rows) == 2
+        assert pb_rows[0]["quantity"] == 1
+        assert pb_rows[0]["incoming_price"] == 0.15
+        assert pb_rows[0]["incoming_currency"] == "EUR"
+        assert pb_rows[0]["status"] == "new"
+        assert pb_rows[1]["quantity"] == 10
+        assert pb_rows[1]["status"] == "new"
+
+    def test_diff_price_breaks_skipped(self):
+        result = self._run(dry_run=True, existing_pb_quantities=[1, 10])
+        pb_rows = result["diff"]["price_breaks"]
+        assert all(r["status"] == "skipped" for r in pb_rows)
+
+    def test_diff_parameters_new(self):
+        result = self._run(dry_run=True, param_exists=False)
+        param_rows = result["diff"]["parameters"]
+        assert len(param_rows) == 1
+        assert param_rows[0]["name"] == "Voltage"
+        assert param_rows[0]["units"] == "V"
+        assert param_rows[0]["incoming"] == "5V"
+        assert param_rows[0]["status"] == "new"
+        assert param_rows[0]["current"] is None
+
+    def test_diff_parameters_skipped(self):
+        result = self._run(dry_run=True, param_exists=True)
+        param_rows = result["diff"]["parameters"]
+        assert param_rows[0]["status"] == "skipped"
+        assert param_rows[0]["current"] == "5V"
+
+    def test_preview_compat_arrays_unchanged(self):
+        """updated/skipped/errors arrays remain backward-compatible."""
+        result = self._run(dry_run=True)
+        assert "image" in result["updated"]
+        assert "datasheet_link" in result["updated"]
+        assert "price_break:1" in result["updated"]
+        assert "parameter:Voltage" in result["updated"]

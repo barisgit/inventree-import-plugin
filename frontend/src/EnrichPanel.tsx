@@ -40,6 +40,36 @@ type ProviderStateResponse = {
   error?: string;
 };
 
+/* ---- Diff payload types (from backend _build_diff) ---- */
+
+type DiffFieldEntry = {
+  field: string;
+  current: string | null;
+  incoming: string | null;
+};
+
+type DiffParameterRow = {
+  name: string;
+  units?: string;
+  current: string | null;
+  incoming: string | null;
+  status: 'new' | 'skipped';
+};
+
+type DiffPriceBreakRow = {
+  quantity: number;
+  incoming_price: number;
+  incoming_currency: string;
+  status: 'new' | 'skipped';
+};
+
+type DiffPayload = {
+  image: DiffFieldEntry | null;
+  datasheet: DiffFieldEntry | null;
+  price_breaks: DiffPriceBreakRow[];
+  parameters: DiffParameterRow[];
+};
+
 type EnrichResult = {
   provider_slug: string;
   provider_name: string;
@@ -47,6 +77,7 @@ type EnrichResult = {
   updated: string[];
   skipped: string[];
   errors: string[];
+  diff?: DiffPayload;
 };
 
 type BulkSummary = {
@@ -74,27 +105,450 @@ type CategoryPart = {
 };
 
 /* ------------------------------------------------------------------ */
-/*  Helpers                                                           */
+/*  Key parsing & structured preview types                            */
 /* ------------------------------------------------------------------ */
 
-function ResultList({ title, items, color }: { title: string; items: string[]; color: string }) {
-  if (items.length === 0) {
-    return null;
+type ItemStatus = 'update' | 'skip' | 'error';
+
+type ParsedItem = {
+  key: string;
+  label: string;
+  status: ItemStatus;
+};
+
+type RichAssetItem = ParsedItem & {
+  currentValue: string | null;
+  incomingValue: string | null;
+};
+
+type RichParameterItem = ParsedItem & {
+  currentValue: string | null;
+  incomingValue: string | null;
+  units?: string;
+};
+
+type RichPriceBreakItem = ParsedItem & {
+  incomingPrice: number | null;
+  incomingCurrency: string | null;
+};
+
+type ParsedSections = {
+  assets: ParsedItem[];
+  parameters: ParsedItem[];
+  priceBreaks: ParsedItem[];
+};
+
+const STATUS_COLOR: Record<ItemStatus, string> = {
+  update: 'green',
+  skip: 'gray',
+  error: 'red',
+};
+
+const STATUS_LABEL: Record<ItemStatus, string> = {
+  update: 'Will update',
+  skip: 'Already set',
+  error: 'Error',
+};
+
+function classifyKey(raw: string): { section: keyof ParsedSections; label: string } {
+  if (raw === 'image') return { section: 'assets', label: 'Part image' };
+  if (raw === 'datasheet_link') return { section: 'assets', label: 'Datasheet link' };
+  if (raw.startsWith('price_break:')) {
+    const qty = raw.slice('price_break:'.length);
+    return { section: 'priceBreaks', label: `Qty ${qty}` };
+  }
+  if (raw.startsWith('parameter:')) {
+    const name = raw.slice('parameter:'.length);
+    return { section: 'parameters', label: name };
+  }
+  return { section: 'assets', label: raw };
+}
+
+function parseResultKeys(result: EnrichResult): ParsedSections {
+  const sections: ParsedSections = { assets: [], parameters: [], priceBreaks: [] };
+
+  for (const key of result.updated) {
+    const { section, label } = classifyKey(key);
+    sections[section].push({ key, label, status: 'update' });
+  }
+  for (const key of result.skipped) {
+    const { section, label } = classifyKey(key);
+    sections[section].push({ key, label, status: 'skip' });
+  }
+  for (const key of result.errors) {
+    sections.assets.push({ key, label: key, status: 'error' });
   }
 
+  return sections;
+}
+
+/* ---- Diff-aware section builders ---- */
+
+function buildAssetItems(result: EnrichResult): RichAssetItem[] {
+  const diff = result.diff;
+  if (!diff) {
+    const sections = parseResultKeys(result);
+    return sections.assets.map((item) => ({ ...item, currentValue: null, incomingValue: null }));
+  }
+  const items: RichAssetItem[] = [];
+  if (diff.image) {
+    items.push({
+      key: 'image',
+      label: 'Part image',
+      status: diff.image.incoming && !diff.image.current ? 'update'
+        : diff.image.incoming && diff.image.current ? 'update'
+        : 'skip',
+      currentValue: diff.image.current,
+      incomingValue: diff.image.incoming,
+    });
+  }
+  if (diff.datasheet) {
+    items.push({
+      key: 'datasheet_link',
+      label: 'Datasheet link',
+      status: diff.datasheet.incoming && !diff.datasheet.current ? 'update'
+        : diff.datasheet.incoming && diff.datasheet.current ? 'update'
+        : 'skip',
+      currentValue: diff.datasheet.current,
+      incomingValue: diff.datasheet.incoming,
+    });
+  }
+  return items;
+}
+
+function buildParameterItems(result: EnrichResult): RichParameterItem[] {
+  const diff = result.diff;
+  if (!diff) {
+    const sections = parseResultKeys(result);
+    return sections.parameters.map((item) => ({ ...item, currentValue: null, incomingValue: null }));
+  }
+  return diff.parameters.map((row) => ({
+    key: `parameter:${row.name}`,
+    label: row.name,
+    status: row.status === 'skipped' ? 'skip' : 'update' as ItemStatus,
+    currentValue: row.current,
+    incomingValue: row.incoming,
+    units: row.units,
+  }));
+}
+
+function buildPriceBreakItems(result: EnrichResult): RichPriceBreakItem[] {
+  const diff = result.diff;
+  if (!diff) {
+    const sections = parseResultKeys(result);
+    return sections.priceBreaks.map((item) => ({ ...item, incomingPrice: null, incomingCurrency: null }));
+  }
+  return diff.price_breaks.map((row) => ({
+    key: `price_break:${row.quantity}`,
+    label: `Qty ${row.quantity}`,
+    status: row.status === 'skipped' ? 'skip' : 'update' as ItemStatus,
+    incomingPrice: row.incoming_price,
+    incomingCurrency: row.incoming_currency,
+  }));
+}
+
+function hasAnyContent(result: EnrichResult): boolean {
+  const diff = result.diff;
+  if (diff) {
+    return (diff.image?.incoming != null)
+      || (diff.datasheet?.incoming != null)
+      || diff.parameters.length > 0
+      || diff.price_breaks.length > 0;
+  }
+  const sections = parseResultKeys(result);
+  return sections.assets.length > 0
+    || sections.parameters.length > 0
+    || sections.priceBreaks.length > 0;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Structured preview components                                     */
+/* ------------------------------------------------------------------ */
+
+function StatusBadge({ status }: { status: ItemStatus }) {
   return (
-    <Stack gap="xs">
-      <Text fw={700} c={color}>{title}</Text>
-      <ul style={{ margin: 0, paddingLeft: '1.2rem' }}>
-        {items.map((item) => (
-          <li key={`${title}-${item}`}>
-            <Text size="sm">{item}</Text>
-          </li>
-        ))}
-      </ul>
+    <Badge size="xs" variant="light" color={STATUS_COLOR[status]}>
+      {STATUS_LABEL[status]}
+    </Badge>
+  );
+}
+
+function SectionHeader({ label, count }: { label: string; count: number }) {
+  return (
+    <Group gap="xs">
+      <Text size="sm" fw={700} tt="uppercase" c="dimmed" style={{ letterSpacing: '0.04em' }}>
+        {label}
+      </Text>
+      <Badge size="xs" variant="default" color="gray">{count}</Badge>
+    </Group>
+  );
+}
+
+/** Renders a truncated link or "None" for diff values. */
+function DiffValue({ value, side }: { value: string | null; side: 'current' | 'incoming' }) {
+  if (value == null) {
+    return <Text size="xs" c="dimmed" fs="italic">None</Text>;
+  }
+  const isUrl = value.startsWith('http');
+  const display = value.length > 50 ? value.slice(0, 47) + '...' : value;
+  const color = side === 'incoming' ? 'green.8' : 'dimmed';
+  if (isUrl) {
+    return (
+      <Tooltip label={value} openDelay={300}>
+        <Text size="xs" c={color} truncate="end" maw={180}>{display}</Text>
+      </Tooltip>
+    );
+  }
+  return <Text size="xs" c={color}>{display}</Text>;
+}
+
+function AssetRows({ items }: { items: RichAssetItem[] }) {
+  if (items.length === 0) return null;
+  const hasRichData = items.some((i) => i.currentValue !== null || i.incomingValue !== null);
+  return (
+    <Stack gap={4}>
+      <SectionHeader label="Assets" count={items.length} />
+      <Paper withBorder radius="sm" p="xs">
+        <Stack gap={6}>
+          {items.map((item) => (
+            <Group key={item.key} justify="space-between" wrap="nowrap">
+              <Text size="sm">{item.label}</Text>
+              {hasRichData ? (
+                <Group gap="xs" wrap="nowrap">
+                  <DiffValue value={item.currentValue} side="current" />
+                  <Text size="xs" c="dimmed">→</Text>
+                  <DiffValue value={item.incomingValue} side="incoming" />
+                  <StatusBadge status={item.status} />
+                </Group>
+              ) : (
+                <StatusBadge status={item.status} />
+              )}
+            </Group>
+          ))}
+        </Stack>
+      </Paper>
     </Stack>
   );
 }
+
+function ParameterRows({ items }: { items: RichParameterItem[] }) {
+  if (items.length === 0) return null;
+  const hasRichData = items.some((i) => i.currentValue !== null || i.incomingValue !== null);
+  const updates = items.filter((i) => i.status === 'update');
+  const skips = items.filter((i) => i.status === 'skip');
+  const sorted = [...updates, ...skips];
+  return (
+    <Stack gap={4}>
+      <SectionHeader label="Parameters" count={items.length} />
+      <Table withTableBorder withColumnBorders verticalSpacing={4} horizontalSpacing="sm">
+        <Table.Thead>
+          <Table.Tr>
+            <Table.Th><Text size="xs" fw={600}>Parameter</Text></Table.Th>
+            {hasRichData && <Table.Th><Text size="xs" fw={600}>Current</Text></Table.Th>}
+            {hasRichData && <Table.Th><Text size="xs" fw={600}>Incoming</Text></Table.Th>}
+            <Table.Th w={100}><Text size="xs" fw={600}>Status</Text></Table.Th>
+          </Table.Tr>
+        </Table.Thead>
+        <Table.Tbody>
+          {sorted.map((item) => (
+            <Table.Tr
+              key={item.key}
+              bg={item.status === 'update' ? 'var(--mantine-color-green-light)' : undefined}
+            >
+              <Table.Td>
+                <Text size="sm">
+                  {item.label}
+                  {item.units ? <Text component="span" size="xs" c="dimmed"> [{item.units}]</Text> : null}
+                </Text>
+              </Table.Td>
+              {hasRichData && (
+                <Table.Td><DiffValue value={item.currentValue} side="current" /></Table.Td>
+              )}
+              {hasRichData && (
+                <Table.Td><DiffValue value={item.incomingValue} side="incoming" /></Table.Td>
+              )}
+              <Table.Td><StatusBadge status={item.status} /></Table.Td>
+            </Table.Tr>
+          ))}
+        </Table.Tbody>
+      </Table>
+    </Stack>
+  );
+}
+
+function PriceBreakRows({ items }: { items: RichPriceBreakItem[] }) {
+  if (items.length === 0) return null;
+  const hasRichData = items.some((i) => i.incomingPrice !== null);
+  const updates = items.filter((i) => i.status === 'update');
+  const skips = items.filter((i) => i.status === 'skip');
+  const sorted = [...updates, ...skips];
+  return (
+    <Stack gap={4}>
+      <SectionHeader label="Price Breaks" count={items.length} />
+      <Table withTableBorder withColumnBorders verticalSpacing={4} horizontalSpacing="sm">
+        <Table.Thead>
+          <Table.Tr>
+            <Table.Th><Text size="xs" fw={600}>Quantity</Text></Table.Th>
+            {hasRichData && <Table.Th><Text size="xs" fw={600}>Incoming Price</Text></Table.Th>}
+            <Table.Th w={100}><Text size="xs" fw={600}>Status</Text></Table.Th>
+          </Table.Tr>
+        </Table.Thead>
+        <Table.Tbody>
+          {sorted.map((item) => (
+            <Table.Tr
+              key={item.key}
+              bg={item.status === 'update' ? 'var(--mantine-color-green-light)' : undefined}
+            >
+              <Table.Td><Text size="sm">{item.label}</Text></Table.Td>
+              {hasRichData && (
+                <Table.Td>
+                  {item.incomingPrice != null ? (
+                    <Text size="sm">
+                      {item.incomingCurrency ? `${item.incomingCurrency} ` : ''}
+                      {item.incomingPrice}
+                    </Text>
+                  ) : (
+                    <Text size="xs" c="dimmed" fs="italic">-</Text>
+                  )}
+                </Table.Td>
+              )}
+              <Table.Td><StatusBadge status={item.status} /></Table.Td>
+            </Table.Tr>
+          ))}
+        </Table.Tbody>
+      </Table>
+    </Stack>
+  );
+}
+
+function StructuredPreview({ result }: { result: EnrichResult }) {
+  const assetItems = useMemo(() => buildAssetItems(result), [result]);
+  const parameterItems = useMemo(() => buildParameterItems(result), [result]);
+  const priceBreakItems = useMemo(() => buildPriceBreakItems(result), [result]);
+
+  if (!hasAnyContent(result)) {
+    return (
+      <Text size="sm" c="dimmed" ta="center" py="md">
+        No changes detected from this provider.
+      </Text>
+    );
+  }
+
+  const updateCount = result.updated.length;
+  const skipCount = result.skipped.length;
+  const errorCount = result.errors.length;
+
+  return (
+    <Stack gap="md">
+      {/* Summary badges */}
+      <Group gap="sm">
+        {updateCount > 0 && (
+          <Badge variant="light" color="green" size="lg">
+            {updateCount} to update
+          </Badge>
+        )}
+        {skipCount > 0 && (
+          <Badge variant="light" color="gray" size="lg">
+            {skipCount} already set
+          </Badge>
+        )}
+        {errorCount > 0 && (
+          <Badge variant="light" color="red" size="lg">
+            {errorCount} {errorCount === 1 ? 'warning' : 'warnings'}
+          </Badge>
+        )}
+      </Group>
+
+      <Divider />
+
+      <AssetRows items={assetItems} />
+      <ParameterRows items={parameterItems} />
+      <PriceBreakRows items={priceBreakItems} />
+    </Stack>
+  );
+}
+
+/** Compact inline preview for bulk result cards. */
+function CompactStructuredPreview({ result }: { result: EnrichResult }) {
+  const diff = result.diff;
+
+  if (!hasAnyContent(result)) {
+    return <Text size="xs" c="dimmed">No changes</Text>;
+  }
+
+  const totalUpdates = result.updated.length;
+  const totalErrors = result.errors.length;
+
+  return (
+    <Stack gap={4}>
+      <Group gap="xs">
+        {totalUpdates > 0 && (
+          <Badge size="xs" variant="light" color="green">{totalUpdates} updates</Badge>
+        )}
+        {result.skipped.length > 0 && (
+          <Badge size="xs" variant="light" color="gray">{result.skipped.length} skipped</Badge>
+        )}
+        {totalErrors > 0 && (
+          <Badge size="xs" variant="light" color="red">{totalErrors} errors</Badge>
+        )}
+      </Group>
+
+      {diff ? (
+        /* Richer compact details when diff payload is present */
+        <>
+          {diff.image?.incoming && (
+            <Text size="xs" c="green.7">
+              Image: {diff.image.current ?? 'none'} → {diff.image.incoming.length > 40 ? `${diff.image.incoming.slice(0, 37)}...` : diff.image.incoming}
+            </Text>
+          )}
+          {diff.datasheet?.incoming && (
+            <Text size="xs" c="green.7">
+              Datasheet: {diff.datasheet.current ?? 'none'} → {diff.datasheet.incoming.length > 40 ? `${diff.datasheet.incoming.slice(0, 37)}...` : diff.datasheet.incoming}
+            </Text>
+          )}
+          {diff.parameters.filter((p) => p.status !== 'skipped').length > 0 && (
+            <Text size="xs" c="green.7">
+              Params: {diff.parameters.filter((p) => p.status !== 'skipped').map((p) => `${p.name}: ${p.current ?? '-'} → ${p.incoming ?? '-'}`).join(', ')}
+            </Text>
+          )}
+          {diff.price_breaks.filter((p) => p.status !== 'skipped').length > 0 && (
+            <Text size="xs" c="green.7">
+              Prices: {diff.price_breaks.filter((p) => p.status !== 'skipped').map((p) => `${p.quantity}× ${p.incoming_currency} ${p.incoming_price}`).join(', ')}
+            </Text>
+          )}
+        </>
+      ) : (
+        /* Fallback: old key-based parsing */
+        (() => {
+          const sections = parseResultKeys(result);
+          return (
+            <>
+              {sections.assets.filter((i) => i.status === 'update').length > 0 && (
+                <Text size="xs" c="green.7">
+                  Assets: {sections.assets.filter((i) => i.status === 'update').map((i) => i.label).join(', ')}
+                </Text>
+              )}
+              {sections.parameters.filter((i) => i.status === 'update').length > 0 && (
+                <Text size="xs" c="green.7">
+                  Params: {sections.parameters.filter((i) => i.status === 'update').map((i) => i.label).join(', ')}
+                </Text>
+              )}
+              {sections.priceBreaks.filter((i) => i.status === 'update').length > 0 && (
+                <Text size="xs" c="green.7">
+                  Prices: {sections.priceBreaks.filter((i) => i.status === 'update').map((i) => i.label).join(', ')}
+                </Text>
+              )}
+            </>
+          );
+        })()
+      )}
+    </Stack>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                           */
+/* ------------------------------------------------------------------ */
 
 function pluginApi(pluginSlug: string, path: string): string {
   return `/plugin/${pluginSlug}/api/${path}`;
@@ -249,9 +703,7 @@ function EnrichPanel({ context }: { context: InvenTreePluginContext }) {
         )}
         {previewResult && !previewLoading && (
           <Stack gap="md">
-            <ResultList title="Would update" items={previewResult.updated} color="green" />
-            <ResultList title="Already set" items={previewResult.skipped} color="gray" />
-            <ResultList title="Warnings" items={previewResult.errors} color="red" />
+            <StructuredPreview result={previewResult} />
             <Group justify="flex-end">
               <Button variant="default" onClick={() => setPreviewResult(null)} disabled={applyLoading}>
                 Close
@@ -572,9 +1024,7 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
                       <Text size="sm" fw={600}>Part #{result.part_id}</Text>
                       <Badge size="sm" variant="dot">{result.provider_name}</Badge>
                     </Group>
-                    <ResultList title="Updated" items={result.updated} color="green" />
-                    <ResultList title="Skipped" items={result.skipped} color="gray" />
-                    <ResultList title="Errors" items={result.errors} color="red" />
+                    <CompactStructuredPreview result={result} />
                   </Card>
                 ))}
 
