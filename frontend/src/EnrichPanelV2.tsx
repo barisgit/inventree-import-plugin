@@ -1050,7 +1050,7 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
 /*  Entry point                                                       */
 /* ------------------------------------------------------------------ */
 
-export function renderEnrichPanelV3(context: InvenTreePluginContext) {
+export function renderEnrichPanel(context: InvenTreePluginContext) {
   if (context.model === 'partcategory') {
     return <CategoryEnrichPanel context={context} />;
   }

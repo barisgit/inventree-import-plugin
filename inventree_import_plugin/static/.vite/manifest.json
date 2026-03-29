@@ -1,8 +1,8 @@
 {
-  "src/EnrichPanelV3.tsx": {
-    "file": "EnrichPanelV3-BdC0WvKs.js",
-    "name": "EnrichPanelV3",
-    "src": "src/EnrichPanelV3.tsx",
+  "src/EnrichPanelV2.tsx": {
+    "file": "EnrichPanelV2-X6TYnH12.js",
+    "name": "EnrichPanelV2",
+    "src": "src/EnrichPanelV2.tsx",
     "isEntry": true
   },
   "src/Settings.tsx": {
