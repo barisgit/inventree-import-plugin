@@ -104,6 +104,7 @@ class TestMapPartData:
         assert part.manufacturer_part_number == "SN74HC595N"
         assert part.manufacturer_name == "Texas Instruments"
         assert "Shift Register" in part.description
+        assert part.link == "https://www.mouser.com/ProductDetail/595-SN74HC595N"
         assert part.datasheet_url == "https://www.ti.com/lit/ds/symlink/sn74hc595.pdf"
 
     def test_extra_data_lifecycle_status(self) -> None:
@@ -178,9 +179,7 @@ class TestMapPartData:
 
 class TestSearchMouser:
     def test_returns_parts_on_success(self) -> None:
-        response = _mock_response(
-            {"Errors": [], "SearchResults": {"Parts": [MOUSER_PART_FIXTURE]}}
-        )
+        response = _mock_response({"Errors": [], "SearchResults": {"Parts": [MOUSER_PART_FIXTURE]}})
         with patch(
             "inventree_import_plugin.suppliers.mouser.requests.post",
             return_value=response,
@@ -191,9 +190,7 @@ class TestSearchMouser:
         assert results[0].manufacturer_part_number == "SN74HC595N"
 
     def test_empty_list_on_no_parts(self) -> None:
-        response = _mock_response(
-            {"Errors": [], "SearchResults": {"Parts": []}}
-        )
+        response = _mock_response({"Errors": [], "SearchResults": {"Parts": []}})
         with patch(
             "inventree_import_plugin.suppliers.mouser.requests.post",
             return_value=response,
@@ -233,9 +230,7 @@ class TestSearchMouser:
 
 class TestFetchMouserPart:
     def test_returns_part_on_success(self) -> None:
-        response = _mock_response(
-            {"Errors": [], "SearchResults": {"Parts": [MOUSER_PART_FIXTURE]}}
-        )
+        response = _mock_response({"Errors": [], "SearchResults": {"Parts": [MOUSER_PART_FIXTURE]}})
         with patch(
             "inventree_import_plugin.suppliers.mouser.requests.post",
             return_value=response,
@@ -246,9 +241,7 @@ class TestFetchMouserPart:
         assert part.sku == "595-SN74HC595N"
 
     def test_returns_none_when_not_found(self) -> None:
-        response = _mock_response(
-            {"Errors": [], "SearchResults": {"Parts": []}}
-        )
+        response = _mock_response({"Errors": [], "SearchResults": {"Parts": []}})
         with patch(
             "inventree_import_plugin.suppliers.mouser.requests.post",
             return_value=response,
@@ -256,9 +249,7 @@ class TestFetchMouserPart:
             assert fetch_mouser_part("test-key", "NONEXISTENT") is None
 
     def test_returns_none_on_api_errors(self) -> None:
-        response = _mock_response(
-            {"Errors": [{"Message": "API error"}], "SearchResults": None}
-        )
+        response = _mock_response({"Errors": [{"Message": "API error"}], "SearchResults": None})
         with patch(
             "inventree_import_plugin.suppliers.mouser.requests.post",
             return_value=response,

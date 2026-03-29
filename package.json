@@ -2,8 +2,11 @@
   "name": "inventree-import-plugin",
   "private": true,
   "scripts": {
+    "frontend:build": "npm --prefix frontend run build",
+    "frontend:dev": "npm --prefix frontend run dev",
+    "frontend:lint": "npm --prefix frontend run lint",
     "test": "python3 -m pytest tests/ -v",
-    "lint": "ruff check inventree_import_plugin/",
+    "lint": "ruff check inventree_import_plugin/ tests/",
     "typecheck": "python3 -m mypy inventree_import_plugin/ --ignore-missing-imports"
   }
 }

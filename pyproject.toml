@@ -6,8 +6,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "inventree-import-plugin"
-version = "0.1.4"
-description = "InvenTree plugin for importing parts from Mouser and LCSC"
+version = "0.2.0"
+description = "Combined InvenTree supplier import and enrich plugin for Mouser and LCSC"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = ["requests>=2.28"]
@@ -16,6 +16,7 @@ dependencies = ["requests>=2.28"]
 dev = ["pytest", "pytest-cov", "ruff", "mypy"]
 
 [project.entry-points."inventree_plugins"]
+InvenTreeImportPlugin = "inventree_import_plugin.core:InvenTreeImportPlugin"
 MouserImportPlugin = "inventree_import_plugin.mouser_plugin:MouserImportPlugin"
 LCSCImportPlugin = "inventree_import_plugin.lcsc_plugin:LCSCImportPlugin"
 
@@ -24,7 +25,7 @@ where = ["."]
 include = ["inventree_import_plugin*"]
 
 [tool.setuptools.package-data]
-inventree_import_plugin = ["static/**/*.js"]
+inventree_import_plugin = ["static/**/*", "templates/**/*.html"]
 
 [tool.ruff]
 line-length = 100

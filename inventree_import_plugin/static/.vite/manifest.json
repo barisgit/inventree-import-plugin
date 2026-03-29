@@ -1,0 +1,14 @@
+{
+  "src/Panel.tsx": {
+    "file": "Panel-2MiGFiG6.js",
+    "name": "Panel",
+    "src": "src/Panel.tsx",
+    "isEntry": true
+  },
+  "src/Settings.tsx": {
+    "file": "Settings-BcwGle0E.js",
+    "name": "Settings",
+    "src": "src/Settings.tsx",
+    "isEntry": true
+  }
+}

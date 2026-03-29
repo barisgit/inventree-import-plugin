@@ -83,6 +83,7 @@ def _map_part_data(part: dict[str, Any]) -> PartData:
         manufacturer_part_number=manufacturer_part_number,
         manufacturer_name=part.get("Manufacturer", ""),
         description=part.get("Description", ""),
+        link=part.get("ProductDetailUrl", ""),
         datasheet_url=part.get("DataSheetUrl", ""),
         image_url=part.get("ImagePath", ""),
         parameters=parameters,

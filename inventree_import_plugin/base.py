@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import logging
 from io import BytesIO
-from dataclasses import dataclass
 from typing import Any
 
 from inventree_import_plugin import PLUGIN_VERSION
+from inventree_import_plugin.compat import SearchResult, Supplier
 from inventree_import_plugin.models import PartData
 
 __all__ = ["BaseImportPlugin", "SearchResult", "Supplier"]
@@ -23,8 +23,8 @@ def _download_and_set_image(part: Any, image_url: str) -> None:
     """
     # 1) InvenTree helper
     try:
-        from InvenTree.helpers_model import download_image_from_url
         from django.core.files.base import ContentFile
+        from InvenTree.helpers_model import download_image_from_url
 
         img = download_image_from_url(image_url)
         if img is not None:
@@ -101,28 +101,6 @@ except ImportError:
     _UrlsMixin = _FallbackMixin
     _UserInterfaceMixin = _FallbackMixin
     _INVENTREE_AVAILABLE = False
-
-
-try:
-    from plugin.base.supplier.helpers import SearchResult, Supplier
-except ImportError:
-
-    @dataclass
-    class Supplier:  # type: ignore[no-redef]
-        slug: str
-        name: str
-
-    @dataclass
-    class SearchResult:  # type: ignore[no-redef]
-        sku: str
-        name: str
-        exact: bool
-        description: str | None = None
-        price: str | None = None
-        link: str | None = None
-        image_url: str | None = None
-        id: str | None = None
-        existing_part: Any | None = None
 
 
 class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTreePlugin):  # type: ignore[misc]
@@ -347,8 +325,8 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
 
     def setup_urls(self) -> list[Any]:
         """Return URL patterns for this plugin, including the enrich endpoint."""
-        from InvenTree.permissions import RolePermission
         from django.urls import path
+        from InvenTree.permissions import RolePermission
         from rest_framework.response import Response
         from rest_framework.views import APIView
 

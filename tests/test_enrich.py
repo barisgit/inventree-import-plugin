@@ -8,10 +8,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from inventree_import_plugin.base import BaseImportPlugin, _download_and_set_image
+from inventree_import_plugin.lcsc_plugin import LCSCImportPlugin
 from inventree_import_plugin.models import PartData, PartParameter, PriceBreak
 from inventree_import_plugin.mouser_plugin import MouserImportPlugin
-from inventree_import_plugin.lcsc_plugin import LCSCImportPlugin
 
 
 @pytest.fixture(autouse=True)
@@ -43,14 +42,10 @@ def _mock_django():
         _view.view_class = cls  # type: ignore[attr-defined]
         return _view
 
-    setattr(
-        rf_views,
+    rf_views.APIView = type(  # type: ignore[attr-defined]
         "APIView",
-        type(
-            "APIView",
-            (),
-            {"as_view": classmethod(_as_view)},
-        ),
+        (),
+        {"as_view": classmethod(_as_view)},
     )
     rest_framework.views = rf_views  # type: ignore[attr-defined]
     rf_response = types.ModuleType("rest_framework.response")
@@ -59,8 +54,8 @@ def _mock_django():
 
     inventree = types.ModuleType("InvenTree")
     inventree_permissions = types.ModuleType("InvenTree.permissions")
-    setattr(inventree_permissions, "RolePermission", type("RolePermission", (), {}))
-    setattr(inventree, "permissions", inventree_permissions)
+    inventree_permissions.RolePermission = type("RolePermission", (), {})  # type: ignore[attr-defined]
+    inventree.permissions = inventree_permissions  # type: ignore[attr-defined]
 
     sys.modules["django"] = django
     sys.modules["django.urls"] = django.urls  # type: ignore[attr-defined]
