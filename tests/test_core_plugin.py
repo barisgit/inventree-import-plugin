@@ -52,18 +52,12 @@ class TestCombinedPluginUi:
         assert panels[0]["context"]["plugin_slug"] == plugin.SLUG
         assert panels[0]["source"] == "static/Panel.js:renderEnrichPanel"
 
-    def test_navigation_item_points_to_bulk_page(self) -> None:
+    def test_navigation_items_default_to_empty(self) -> None:
         plugin = InvenTreeImportPlugin()
-        request = type(
-            "Request",
-            (),
-            {"build_absolute_uri": staticmethod(lambda path: f"https://inventree.example{path}")},
-        )()
 
-        items = plugin.get_ui_navigation_items(request, {})
+        items = plugin.get_ui_navigation_items(None, {})
 
-        assert len(items) == 1
-        assert items[0]["options"]["url"] == f"https://inventree.example/plugin/{plugin.SLUG}/bulk/"
+        assert items == []
 
 
 class TestBulkPayloadParsing:
