@@ -215,6 +215,10 @@ function classifyKey(raw: string): { section: keyof ParsedSections; label: strin
     const field = raw.slice('supplier_part:'.length);
     return { section: 'supplierParts', label: SUPPLIER_PART_FIELD_LABELS[field] ?? field };
   }
+  if (raw.startsWith('supplier_parameter:')) {
+    const name = raw.slice('supplier_parameter:'.length);
+    return { section: 'parameters', label: `Supplier: ${name}` };
+  }
   return { section: 'assets', label: raw };
 }
 
@@ -1025,6 +1029,7 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkMode, setBulkMode] = useState<'preview' | 'apply'>('preview');
   const [bulkSelectedKeys, setBulkSelectedKeys] = useState<Record<string, Set<string>>>({});
+  const [bulkError, setBulkError] = useState<string | null>(null);
 
   /* -- fetch parts in category -- */
   useEffect(() => {
@@ -1116,6 +1121,7 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
     setBulkLoading(true);
     setBulkMode('preview');
     setBulkResult(null);
+    setBulkError(null);
     try {
       const response = await context.api.post<BulkResponse>(
         pluginApi(pluginSlug, 'bulk/preview/'),
@@ -1128,7 +1134,8 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
         init[resultKey] = getSelectableResultKeys(result);
       }
       setBulkSelectedKeys(init);
-    } catch {
+    } catch (err) {
+      setBulkError(String(err));
       setBulkResult({
         results: [],
         summary: { requested_parts: selectedPartIds.size, provider_count: selectedProviderSlugs.length, operations: 0, failed: 1, succeeded: 0 },
@@ -1165,6 +1172,7 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
     if (operations.length === 0) return;
 
     setBulkLoading(true);
+    setBulkError(null);
     try {
       const response = await context.api.post<BulkResponse>(
         pluginApi(pluginSlug, 'bulk/apply/'),
@@ -1173,7 +1181,8 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
       setBulkResult(response.data);
       setBulkMode('apply');
       setBulkSelectedKeys({});
-    } catch {
+    } catch (err) {
+      setBulkError(String(err));
       setBulkResult({
         results: [],
         summary: {
@@ -1317,15 +1326,21 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
       {/* Bulk results modal */}
       <Modal
         opened={bulkLoading || bulkResult !== null}
-        onClose={() => { if (!bulkLoading) { setBulkResult(null); setBulkSelectedKeys({}); } }}
+        onClose={() => { if (!bulkLoading) { setBulkResult(null); setBulkSelectedKeys({}); setBulkError(null); } }}
         title={bulkMode === 'preview' ? 'Bulk Preview Results' : 'Bulk Apply Results'}
-        size="xl"
+        size="90vw"
+        fullScreen={false}
+        yOffset={0}
+        styles={{
+          content: { maxHeight: '92vh', display: 'flex', flexDirection: 'column' },
+          body: { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 },
+        }}
       >
         {bulkLoading && (
           <Group><Loader size="sm" /><Text>Processing...</Text></Group>
         )}
         {bulkResult && !bulkLoading && (
-          <Stack gap="md">
+          <Stack gap="md" style={{ flex: 1, minHeight: 0 }}>
             {/* Summary bar */}
             <Group gap="lg">
               <Badge color="blue" variant="light" size="lg">
@@ -1344,7 +1359,7 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
             <Divider />
 
             {/* Per-part results */}
-            <ScrollArea.Autosize mah={400}>
+            <ScrollArea.Autosize mah="calc(92vh - 220px)" style={{ flex: 1 }}>
               <Stack gap="sm">
                 {bulkResult.results.map((result) => {
                   const resultKey = `${result.part_id}-${result.provider_slug}`;
@@ -1354,7 +1369,7 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
                       key={resultKey}
                       withBorder
                       radius="sm"
-                      padding="sm"
+                      padding="md"
                     >
                       <Group gap="xs" mb={4}>
                         <Text size="sm" fw={600}>Part #{result.part_id}</Text>
@@ -1374,13 +1389,17 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
                 })}
 
                 {bulkResult.results.length === 0 && (
-                  <Text c="dimmed" size="sm" ta="center">No results returned.</Text>
+                  bulkError ? (
+                    <Alert color="red" title="Bulk operation failed">{bulkError}</Alert>
+                  ) : (
+                    <Text c="dimmed" size="sm" ta="center">No results returned.</Text>
+                  )
                 )}
               </Stack>
             </ScrollArea.Autosize>
 
             <Group justify="flex-end">
-              <Button variant="default" onClick={() => { setBulkResult(null); setBulkSelectedKeys({}); }}>
+              <Button variant="default" onClick={() => { setBulkResult(null); setBulkSelectedKeys({}); setBulkError(null); }}>
                 Close
               </Button>
               {bulkMode === 'preview' && (
