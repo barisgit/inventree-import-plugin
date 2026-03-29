@@ -151,6 +151,13 @@ const STATUS_LABEL: Record<ItemStatus, string> = {
   error: 'Error',
 };
 
+/** Resolve the authoritative status for a key from the EnrichResult lists. */
+function authoritativeStatus(key: string, result: EnrichResult): ItemStatus {
+  if (result.skipped.includes(key)) return 'skip';
+  if (result.updated.includes(key)) return 'update';
+  return 'skip';
+}
+
 function classifyKey(raw: string): { section: keyof ParsedSections; label: string } {
   if (raw === 'image') return { section: 'assets', label: 'Part image' };
   if (raw === 'datasheet_link') return { section: 'assets', label: 'Datasheet link' };
@@ -194,21 +201,19 @@ function buildAssetItems(result: EnrichResult): RichAssetItem[] {
   }
   const items: RichAssetItem[] = [];
   if (diff.image) {
-    const status: ItemStatus = diff.image.status === 'skipped' ? 'skip' : 'update';
     items.push({
       key: 'image',
       label: 'Part image',
-      status,
+      status: authoritativeStatus('image', result),
       currentValue: diff.image.current,
       incomingValue: diff.image.incoming,
     });
   }
   if (diff.datasheet) {
-    const status: ItemStatus = diff.datasheet.status === 'skipped' ? 'skip' : 'update';
     items.push({
       key: 'datasheet_link',
       label: 'Datasheet link',
-      status,
+      status: authoritativeStatus('datasheet_link', result),
       currentValue: diff.datasheet.current,
       incomingValue: diff.datasheet.incoming,
     });
@@ -225,7 +230,7 @@ function buildParameterItems(result: EnrichResult): RichParameterItem[] {
   return diff.parameters.map((row) => ({
     key: `parameter:${row.name}`,
     label: row.name,
-    status: row.status === 'skipped' ? 'skip' : 'update' as ItemStatus,
+    status: authoritativeStatus(`parameter:${row.name}`, result),
     currentValue: row.current,
     incomingValue: row.incoming,
     units: row.units,
@@ -241,24 +246,14 @@ function buildPriceBreakItems(result: EnrichResult): RichPriceBreakItem[] {
   return diff.price_breaks.map((row) => ({
     key: `price_break:${row.quantity}`,
     label: `Qty ${row.quantity}`,
-    status: row.status === 'skipped' ? 'skip' : 'update' as ItemStatus,
+    status: authoritativeStatus(`price_break:${row.quantity}`, result),
     incomingPrice: row.incoming_price,
     incomingCurrency: row.incoming_currency,
   }));
 }
 
 function hasAnyContent(result: EnrichResult): boolean {
-  const diff = result.diff;
-  if (diff) {
-    return (diff.image?.incoming != null)
-      || (diff.datasheet?.incoming != null)
-      || diff.parameters.length > 0
-      || diff.price_breaks.length > 0;
-  }
-  const sections = parseResultKeys(result);
-  return sections.assets.length > 0
-    || sections.parameters.length > 0
-    || sections.priceBreaks.length > 0;
+  return result.updated.length > 0 || result.skipped.length > 0 || result.errors.length > 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -508,24 +503,24 @@ function CompactStructuredPreview({ result }: { result: EnrichResult }) {
       {diff ? (
         /* Richer compact details when diff payload is present */
         <>
-          {diff.image && diff.image.status !== 'skipped' && (
+          {diff.image && !result.skipped.includes('image') && (
             <Text size="xs" c="green.7">
               Image: {diff.image.current ?? 'none'} → {diff.image.incoming && diff.image.incoming.length > 40 ? `${diff.image.incoming.slice(0, 37)}...` : diff.image.incoming}
             </Text>
           )}
-          {diff.datasheet && diff.datasheet.status !== 'skipped' && (
+          {diff.datasheet && !result.skipped.includes('datasheet_link') && (
             <Text size="xs" c="green.7">
               Datasheet: {diff.datasheet.current ?? 'none'} → {diff.datasheet.incoming && diff.datasheet.incoming.length > 40 ? `${diff.datasheet.incoming.slice(0, 37)}...` : diff.datasheet.incoming}
             </Text>
           )}
-          {diff.parameters.filter((p) => p.status !== 'skipped').length > 0 && (
+          {diff.parameters.filter((p) => !result.skipped.includes(`parameter:${p.name}`)).length > 0 && (
             <Text size="xs" c="green.7">
-              Params: {diff.parameters.filter((p) => p.status !== 'skipped').map((p) => `${p.name}: ${p.current ?? '-'} → ${p.incoming ?? '-'}`).join(', ')}
+              Params: {diff.parameters.filter((p) => !result.skipped.includes(`parameter:${p.name}`)).map((p) => `${p.name}: ${p.current ?? '-'} → ${p.incoming ?? '-'}`).join(', ')}
             </Text>
           )}
-          {diff.price_breaks.filter((p) => p.status !== 'skipped').length > 0 && (
+          {diff.price_breaks.filter((p) => !result.skipped.includes(`price_break:${p.quantity}`)).length > 0 && (
             <Text size="xs" c="green.7">
-              Prices: {diff.price_breaks.filter((p) => p.status !== 'skipped').map((p) => `${p.quantity}× ${p.incoming_currency} ${p.incoming_price}`).join(', ')}
+              Prices: {diff.price_breaks.filter((p) => !result.skipped.includes(`price_break:${p.quantity}`)).map((p) => `${p.quantity}× ${p.incoming_currency} ${p.incoming_price}`).join(', ')}
             </Text>
           )}
         </>
@@ -708,7 +703,7 @@ function EnrichPanel({ context }: { context: InvenTreePluginContext }) {
         opened={previewLoading || previewResult !== null}
         onClose={() => { if (!previewLoading && !applyLoading) setPreviewResult(null); }}
         title={previewResult ? `${previewResult.provider_name} preview` : 'Loading preview'}
-        size="xl"
+        size="80vw"
       >
         {previewLoading && (
           <Group><Loader size="sm" /><Text>Loading preview...</Text></Group>
