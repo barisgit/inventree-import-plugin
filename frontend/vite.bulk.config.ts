@@ -9,6 +9,7 @@ export default defineConfig({
     emptyOutDir: false,
     sourcemap: true,
     rollupOptions: {
+      preserveEntrySignatures: 'exports-only',
       input: ['./src/StandaloneBulkPage.tsx'],
       output: {
         dir: '../inventree_import_plugin/static/bulk',
