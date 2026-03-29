@@ -76,6 +76,7 @@ type DiffPayload = {
   datasheet: DiffFieldEntry | null;
   price_breaks: DiffPriceBreakRow[];
   parameters: DiffParameterRow[];
+  part_fields: DiffFieldEntry[];
   supplier_part: DiffSupplierPartRow[];
 };
 
@@ -136,6 +137,11 @@ type RichParameterItem = ParsedItem & {
   units?: string;
 };
 
+type RichPartFieldItem = ParsedItem & {
+  currentValue: string | null;
+  incomingValue: string | null;
+};
+
 type RichPriceBreakItem = ParsedItem & {
   incomingPrice: number | null;
   incomingCurrency: string | null;
@@ -148,9 +154,16 @@ type RichSupplierPartItem = ParsedItem & {
 
 type ParsedSections = {
   assets: ParsedItem[];
+  partFields: ParsedItem[];
   parameters: ParsedItem[];
   priceBreaks: ParsedItem[];
   supplierParts: ParsedItem[];
+};
+
+type SelectionProps = {
+  selectable?: boolean;
+  selectedKeys?: Set<string>;
+  onToggleKey?: (key: string) => void;
 };
 
 const STATUS_COLOR: Record<ItemStatus, string> = {
@@ -171,6 +184,11 @@ const SUPPLIER_PART_FIELD_LABELS: Record<string, string> = {
   available: 'Available quantity',
 };
 
+const PART_FIELD_LABELS: Record<string, string> = {
+  description: 'Part description',
+  link: 'Part link',
+};
+
 /** Resolve the authoritative status for a key from the EnrichResult lists. */
 function authoritativeStatus(key: string, result: EnrichResult): ItemStatus {
   if (result.skipped.includes(key)) return 'skip';
@@ -189,6 +207,10 @@ function classifyKey(raw: string): { section: keyof ParsedSections; label: strin
     const name = raw.slice('parameter:'.length);
     return { section: 'parameters', label: name };
   }
+  if (raw.startsWith('part:')) {
+    const field = raw.slice('part:'.length);
+    return { section: 'partFields', label: PART_FIELD_LABELS[field] ?? field };
+  }
   if (raw.startsWith('supplier_part:')) {
     const field = raw.slice('supplier_part:'.length);
     return { section: 'supplierParts', label: SUPPLIER_PART_FIELD_LABELS[field] ?? field };
@@ -197,7 +219,13 @@ function classifyKey(raw: string): { section: keyof ParsedSections; label: strin
 }
 
 function parseResultKeys(result: EnrichResult): ParsedSections {
-  const sections: ParsedSections = { assets: [], parameters: [], priceBreaks: [], supplierParts: [] };
+  const sections: ParsedSections = {
+    assets: [],
+    partFields: [],
+    parameters: [],
+    priceBreaks: [],
+    supplierParts: [],
+  };
 
   for (const key of result.updated) {
     const { section, label } = classifyKey(key);
@@ -261,6 +289,21 @@ function buildParameterItems(result: EnrichResult): RichParameterItem[] {
   }));
 }
 
+function buildPartFieldItems(result: EnrichResult): RichPartFieldItem[] {
+  const diff = result.diff;
+  if (!diff) {
+    const sections = parseResultKeys(result);
+    return sections.partFields.map((item) => ({ ...item, currentValue: null, incomingValue: null }));
+  }
+  return diff.part_fields.map((row) => ({
+    key: `part:${row.field}`,
+    label: PART_FIELD_LABELS[row.field] ?? row.field,
+    status: authoritativeStatus(`part:${row.field}`, result),
+    currentValue: row.current,
+    incomingValue: row.incoming,
+  }));
+}
+
 function buildPriceBreakItems(result: EnrichResult): RichPriceBreakItem[] {
   const diff = result.diff;
   if (!diff) {
@@ -293,6 +336,72 @@ function buildSupplierPartItems(result: EnrichResult): RichSupplierPartItem[] {
 
 function hasAnyContent(result: EnrichResult): boolean {
   return result.updated.length > 0 || result.skipped.length > 0 || result.errors.length > 0;
+}
+
+type PreviewSections = {
+  assetItems: RichAssetItem[];
+  partFieldItems: RichPartFieldItem[];
+  parameterItems: RichParameterItem[];
+  priceBreakItems: RichPriceBreakItem[];
+  supplierPartItems: RichSupplierPartItem[];
+};
+
+function buildPreviewSections(result: EnrichResult): PreviewSections {
+  return {
+    assetItems: buildAssetItems(result),
+    partFieldItems: buildPartFieldItems(result),
+    parameterItems: buildParameterItems(result),
+    priceBreakItems: buildPriceBreakItems(result),
+    supplierPartItems: buildSupplierPartItems(result),
+  };
+}
+
+function countPreviewStatuses(sections: PreviewSections): { updateCount: number; skipCount: number } {
+  const items = [
+    ...sections.assetItems,
+    ...sections.partFieldItems,
+    ...sections.parameterItems,
+    ...sections.priceBreakItems,
+    ...sections.supplierPartItems,
+  ];
+
+  return {
+    updateCount: items.filter((item) => item.status === 'update').length,
+    skipCount: items.filter((item) => item.status === 'skip').length,
+  };
+}
+
+function getSelectableResultKeys(result: EnrichResult): Set<string> {
+  const sections = buildPreviewSections(result);
+  return new Set(
+    [
+      ...sections.assetItems,
+      ...sections.partFieldItems,
+      ...sections.parameterItems,
+      ...sections.priceBreakItems,
+      ...sections.supplierPartItems,
+    ]
+      .filter((item) => item.status === 'update')
+      .map((item) => item.key)
+  );
+}
+
+function expandSelectedKeysForApply(result: EnrichResult, selectedKeys: Set<string>): string[] {
+  const expanded = new Set(selectedKeys);
+
+  for (const key of selectedKeys) {
+    if (!key.startsWith('parameter:')) {
+      continue;
+    }
+
+    const parameterName = key.slice('parameter:'.length);
+    const supplierParameterKey = `supplier_parameter:${parameterName}`;
+    if (result.updated.includes(supplierParameterKey)) {
+      expanded.add(supplierParameterKey);
+    }
+  }
+
+  return Array.from(expanded);
 }
 
 /* ------------------------------------------------------------------ */
@@ -348,7 +457,9 @@ function DiffValue({ value, side }: { value: string | null; side: 'current' | 'i
   return <Text size="xs" c={color} style={{ wordBreak: 'break-word' }}>{display}</Text>;
 }
 
-function AssetRows({ items }: { items: RichAssetItem[] }) {
+function AssetRows({ items, selectable, selectedKeys, onToggleKey }: {
+  items: RichAssetItem[];
+} & SelectionProps) {
   if (items.length === 0) return null;
   const hasRichData = items.some((i) => i.currentValue !== null || i.incomingValue !== null);
   return (
@@ -358,7 +469,17 @@ function AssetRows({ items }: { items: RichAssetItem[] }) {
         <Stack gap={6}>
           {items.map((item) => (
             <Group key={item.key} justify="space-between" wrap="nowrap">
-              <Text size="sm">{item.label}</Text>
+              <Group gap="xs" wrap="nowrap">
+                {selectable && item.status === 'update' && (
+                  <Checkbox
+                    checked={selectedKeys?.has(item.key) ?? false}
+                    onChange={() => onToggleKey?.(item.key)}
+                    size="xs"
+                    aria-label={`Select ${item.label}`}
+                  />
+                )}
+                <Text size="sm">{item.label}</Text>
+              </Group>
               {hasRichData ? (
                 <Group gap="xs" wrap="nowrap">
                   <DiffValue value={item.currentValue} side="current" />
@@ -377,7 +498,9 @@ function AssetRows({ items }: { items: RichAssetItem[] }) {
   );
 }
 
-function ParameterRows({ items }: { items: RichParameterItem[] }) {
+function ParameterRows({ items, selectable, selectedKeys, onToggleKey }: {
+  items: RichParameterItem[];
+} & SelectionProps) {
   if (items.length === 0) return null;
   const hasRichData = items.some((i) => i.currentValue !== null || i.incomingValue !== null);
   const updates = items.filter((i) => i.status === 'update');
@@ -389,6 +512,7 @@ function ParameterRows({ items }: { items: RichParameterItem[] }) {
       <Table withTableBorder withColumnBorders verticalSpacing={4} horizontalSpacing="sm">
         <Table.Thead>
           <Table.Tr>
+            {selectable && <Table.Th w={40} />}
             <Table.Th><Text size="xs" fw={600}>Parameter</Text></Table.Th>
             {hasRichData && <Table.Th><Text size="xs" fw={600}>Current</Text></Table.Th>}
             {hasRichData && <Table.Th><Text size="xs" fw={600}>Incoming</Text></Table.Th>}
@@ -401,6 +525,18 @@ function ParameterRows({ items }: { items: RichParameterItem[] }) {
               key={item.key}
               bg={item.status === 'update' ? 'var(--mantine-color-green-light)' : undefined}
             >
+              {selectable && (
+                <Table.Td>
+                  {item.status === 'update' && (
+                    <Checkbox
+                      checked={selectedKeys?.has(item.key) ?? false}
+                      onChange={() => onToggleKey?.(item.key)}
+                      size="xs"
+                      aria-label={`Select ${item.label}`}
+                    />
+                  )}
+                </Table.Td>
+              )}
               <Table.Td>
                 <Text size="sm">
                   {item.label}
@@ -422,7 +558,9 @@ function ParameterRows({ items }: { items: RichParameterItem[] }) {
   );
 }
 
-function PriceBreakRows({ items }: { items: RichPriceBreakItem[] }) {
+function PriceBreakRows({ items, selectable, selectedKeys, onToggleKey }: {
+  items: RichPriceBreakItem[];
+} & SelectionProps) {
   if (items.length === 0) return null;
   const hasRichData = items.some((i) => i.incomingPrice !== null);
   const updates = items.filter((i) => i.status === 'update');
@@ -434,6 +572,7 @@ function PriceBreakRows({ items }: { items: RichPriceBreakItem[] }) {
       <Table withTableBorder withColumnBorders verticalSpacing={4} horizontalSpacing="sm">
         <Table.Thead>
           <Table.Tr>
+            {selectable && <Table.Th w={40} />}
             <Table.Th><Text size="xs" fw={600}>Quantity</Text></Table.Th>
             {hasRichData && <Table.Th><Text size="xs" fw={600}>Incoming Price</Text></Table.Th>}
             <Table.Th w={100}><Text size="xs" fw={600}>Status</Text></Table.Th>
@@ -445,6 +584,18 @@ function PriceBreakRows({ items }: { items: RichPriceBreakItem[] }) {
               key={item.key}
               bg={item.status === 'update' ? 'var(--mantine-color-green-light)' : undefined}
             >
+              {selectable && (
+                <Table.Td>
+                  {item.status === 'update' && (
+                    <Checkbox
+                      checked={selectedKeys?.has(item.key) ?? false}
+                      onChange={() => onToggleKey?.(item.key)}
+                      size="xs"
+                      aria-label={`Select ${item.label}`}
+                    />
+                  )}
+                </Table.Td>
+              )}
               <Table.Td><Text size="sm">{item.label}</Text></Table.Td>
               {hasRichData && (
                 <Table.Td>
@@ -467,7 +618,9 @@ function PriceBreakRows({ items }: { items: RichPriceBreakItem[] }) {
   );
 }
 
-function SupplierPartRows({ items }: { items: RichSupplierPartItem[] }) {
+function PartFieldRows({ items, selectable, selectedKeys, onToggleKey }: {
+  items: RichPartFieldItem[];
+} & SelectionProps) {
   if (items.length === 0) return null;
   const hasRichData = items.some((i) => i.currentValue !== null || i.incomingValue !== null);
   const updates = items.filter((i) => i.status === 'update');
@@ -475,10 +628,11 @@ function SupplierPartRows({ items }: { items: RichSupplierPartItem[] }) {
   const sorted = [...updates, ...skips];
   return (
     <Stack gap={4}>
-      <SectionHeader label="Supplier Part" count={items.length} />
+      <SectionHeader label="Part Fields" count={items.length} />
       <Table withTableBorder withColumnBorders verticalSpacing={4} horizontalSpacing="sm">
         <Table.Thead>
           <Table.Tr>
+            {selectable && <Table.Th w={40} />}
             <Table.Th><Text size="xs" fw={600}>Field</Text></Table.Th>
             {hasRichData && <Table.Th><Text size="xs" fw={600}>Current</Text></Table.Th>}
             {hasRichData && <Table.Th><Text size="xs" fw={600}>Incoming</Text></Table.Th>}
@@ -491,6 +645,73 @@ function SupplierPartRows({ items }: { items: RichSupplierPartItem[] }) {
               key={item.key}
               bg={item.status === 'update' ? 'var(--mantine-color-green-light)' : undefined}
             >
+              {selectable && (
+                <Table.Td>
+                  {item.status === 'update' && (
+                    <Checkbox
+                      checked={selectedKeys?.has(item.key) ?? false}
+                      onChange={() => onToggleKey?.(item.key)}
+                      size="xs"
+                      aria-label={`Select ${item.label}`}
+                    />
+                  )}
+                </Table.Td>
+              )}
+              <Table.Td><Text size="sm">{item.label}</Text></Table.Td>
+              {hasRichData && (
+                <Table.Td><DiffValue value={item.currentValue} side="current" /></Table.Td>
+              )}
+              {hasRichData && (
+                <Table.Td><DiffValue value={item.incomingValue} side="incoming" /></Table.Td>
+              )}
+              <Table.Td><StatusBadge status={item.status} /></Table.Td>
+            </Table.Tr>
+          ))}
+        </Table.Tbody>
+      </Table>
+    </Stack>
+  );
+}
+
+function SupplierPartRows({ items, selectable, selectedKeys, onToggleKey }: {
+  items: RichSupplierPartItem[];
+} & SelectionProps) {
+  if (items.length === 0) return null;
+  const hasRichData = items.some((i) => i.currentValue !== null || i.incomingValue !== null);
+  const updates = items.filter((i) => i.status === 'update');
+  const skips = items.filter((i) => i.status === 'skip');
+  const sorted = [...updates, ...skips];
+  return (
+    <Stack gap={4}>
+      <SectionHeader label="Supplier Part" count={items.length} />
+      <Table withTableBorder withColumnBorders verticalSpacing={4} horizontalSpacing="sm">
+        <Table.Thead>
+          <Table.Tr>
+            {selectable && <Table.Th w={40} />}
+            <Table.Th><Text size="xs" fw={600}>Field</Text></Table.Th>
+            {hasRichData && <Table.Th><Text size="xs" fw={600}>Current</Text></Table.Th>}
+            {hasRichData && <Table.Th><Text size="xs" fw={600}>Incoming</Text></Table.Th>}
+            <Table.Th w={100}><Text size="xs" fw={600}>Status</Text></Table.Th>
+          </Table.Tr>
+        </Table.Thead>
+        <Table.Tbody>
+          {sorted.map((item) => (
+            <Table.Tr
+              key={item.key}
+              bg={item.status === 'update' ? 'var(--mantine-color-green-light)' : undefined}
+            >
+              {selectable && (
+                <Table.Td>
+                  {item.status === 'update' && (
+                    <Checkbox
+                      checked={selectedKeys?.has(item.key) ?? false}
+                      onChange={() => onToggleKey?.(item.key)}
+                      size="xs"
+                      aria-label={`Select ${item.label}`}
+                    />
+                  )}
+                </Table.Td>
+              )}
               <Table.Td><Text size="sm">{item.label}</Text></Table.Td>
               {hasRichData && (
                 <Table.Td><DiffValue value={item.currentValue} side="current" /></Table.Td>
@@ -508,10 +729,7 @@ function SupplierPartRows({ items }: { items: RichSupplierPartItem[] }) {
 }
 
 function StructuredPreview({ result }: { result: EnrichResult }) {
-  const assetItems = useMemo(() => buildAssetItems(result), [result]);
-  const parameterItems = useMemo(() => buildParameterItems(result), [result]);
-  const priceBreakItems = useMemo(() => buildPriceBreakItems(result), [result]);
-  const supplierPartItems = useMemo(() => buildSupplierPartItems(result), [result]);
+  const sections = useMemo(() => buildPreviewSections(result), [result]);
 
   if (!hasAnyContent(result)) {
     return (
@@ -521,8 +739,7 @@ function StructuredPreview({ result }: { result: EnrichResult }) {
     );
   }
 
-  const updateCount = result.updated.length;
-  const skipCount = result.skipped.length;
+  const { updateCount, skipCount } = countPreviewStatuses(sections);
   const errorCount = result.errors.length;
 
   return (
@@ -548,101 +765,57 @@ function StructuredPreview({ result }: { result: EnrichResult }) {
 
       <Divider />
 
-      <AssetRows items={assetItems} />
-      <SupplierPartRows items={supplierPartItems} />
-      <ParameterRows items={parameterItems} />
-      <PriceBreakRows items={priceBreakItems} />
+      <AssetRows items={sections.assetItems} />
+      <PartFieldRows items={sections.partFieldItems} />
+      <SupplierPartRows items={sections.supplierPartItems} />
+      <ParameterRows items={sections.parameterItems} />
+      <PriceBreakRows items={sections.priceBreakItems} />
     </Stack>
   );
 }
 
-/** Compact inline preview for bulk result cards. */
-function CompactStructuredPreview({ result }: { result: EnrichResult }) {
-  const diff = result.diff;
+/** Structured preview with per-key selection controls for bulk operations. */
+function BulkStructuredPreview({
+  result,
+  selectedKeys,
+  onToggleKey,
+}: {
+  result: EnrichResult;
+  selectedKeys: Set<string>;
+  onToggleKey: (key: string) => void;
+}) {
+  const sections = useMemo(() => buildPreviewSections(result), [result]);
 
   if (!hasAnyContent(result)) {
-    return <Text size="xs" c="dimmed">No changes</Text>;
+    return <Text size="sm" c="dimmed" ta="center" py="md">No changes detected from this provider.</Text>;
   }
 
-  const totalUpdates = result.updated.length;
-  const totalErrors = result.errors.length;
+  const { updateCount, skipCount } = countPreviewStatuses(sections);
+  const errorCount = result.errors.length;
 
   return (
-    <Stack gap={4}>
-      <Group gap="xs">
-        {totalUpdates > 0 && (
-          <Badge size="xs" variant="light" color="green">{totalUpdates} updates</Badge>
+    <Stack gap="md">
+      <Group gap="sm">
+        {updateCount > 0 && (
+          <Badge variant="light" color="green" size="lg">{updateCount} to update</Badge>
         )}
-        {result.skipped.length > 0 && (
-          <Badge size="xs" variant="light" color="gray">{result.skipped.length} skipped</Badge>
+        {skipCount > 0 && (
+          <Badge variant="light" color="gray" size="lg">{skipCount} already set</Badge>
         )}
-        {totalErrors > 0 && (
-          <Badge size="xs" variant="light" color="red">{totalErrors} errors</Badge>
+        {errorCount > 0 && (
+          <Badge variant="light" color="red" size="lg">
+            {errorCount} {errorCount === 1 ? 'warning' : 'warnings'}
+          </Badge>
         )}
       </Group>
 
-      {diff ? (
-        /* Richer compact details when diff payload is present */
-        <>
-          {diff.image && !result.skipped.includes('image') && (
-            <Text size="xs" c="green.7">
-              Image: {diff.image.current ?? 'none'} → {diff.image.incoming && diff.image.incoming.length > 40 ? `${diff.image.incoming.slice(0, 37)}...` : diff.image.incoming}
-            </Text>
-          )}
-          {diff.datasheet && !result.skipped.includes('datasheet_link') && (
-            <Text size="xs" c="green.7">
-              Datasheet: {diff.datasheet.current ?? 'none'} → {diff.datasheet.incoming && diff.datasheet.incoming.length > 40 ? `${diff.datasheet.incoming.slice(0, 37)}...` : diff.datasheet.incoming}
-            </Text>
-          )}
-          {diff.parameters.filter((p) => !result.skipped.includes(`parameter:${p.name}`)).length > 0 && (
-            <Text size="xs" c="green.7">
-              Params: {diff.parameters.filter((p) => !result.skipped.includes(`parameter:${p.name}`)).map((p) => `${p.name}: ${p.current ?? '-'} → ${p.incoming ?? '-'}`).join(', ')}
-            </Text>
-          )}
-          {diff.price_breaks.filter((p) => !result.skipped.includes(`price_break:${p.quantity}`)).length > 0 && (
-            <Text size="xs" c="green.7">
-              Prices: {diff.price_breaks.filter((p) => !result.skipped.includes(`price_break:${p.quantity}`)).map((p) => `${p.quantity}× ${p.incoming_currency} ${p.incoming_price}`).join(', ')}
-            </Text>
-          )}
-          {diff.supplier_part.filter((sp) => !result.skipped.includes(`supplier_part:${sp.field}`)).length > 0 && (
-            <Text size="xs" c="green.7">
-              Supplier: {diff.supplier_part.filter((sp) => !result.skipped.includes(`supplier_part:${sp.field}`)).map((sp) => {
-                const label = SUPPLIER_PART_FIELD_LABELS[sp.field] ?? sp.field;
-                return `${label}: ${sp.current ?? '-'} → ${sp.incoming ?? '-'}`;
-              }).join(', ')}
-            </Text>
-          )}
-        </>
-      ) : (
-        /* Fallback: old key-based parsing */
-        (() => {
-          const sections = parseResultKeys(result);
-          return (
-            <>
-              {sections.assets.filter((i) => i.status === 'update').length > 0 && (
-                <Text size="xs" c="green.7">
-                  Assets: {sections.assets.filter((i) => i.status === 'update').map((i) => i.label).join(', ')}
-                </Text>
-              )}
-              {sections.parameters.filter((i) => i.status === 'update').length > 0 && (
-                <Text size="xs" c="green.7">
-                  Params: {sections.parameters.filter((i) => i.status === 'update').map((i) => i.label).join(', ')}
-                </Text>
-              )}
-              {sections.priceBreaks.filter((i) => i.status === 'update').length > 0 && (
-                <Text size="xs" c="green.7">
-                  Prices: {sections.priceBreaks.filter((i) => i.status === 'update').map((i) => i.label).join(', ')}
-                </Text>
-              )}
-              {sections.supplierParts.filter((i) => i.status === 'update').length > 0 && (
-                <Text size="xs" c="green.7">
-                  Supplier: {sections.supplierParts.filter((i) => i.status === 'update').map((i) => i.label).join(', ')}
-                </Text>
-              )}
-            </>
-          );
-        })()
-      )}
+      <Divider />
+
+      <AssetRows items={sections.assetItems} selectable selectedKeys={selectedKeys} onToggleKey={onToggleKey} />
+      <PartFieldRows items={sections.partFieldItems} selectable selectedKeys={selectedKeys} onToggleKey={onToggleKey} />
+      <SupplierPartRows items={sections.supplierPartItems} selectable selectedKeys={selectedKeys} onToggleKey={onToggleKey} />
+      <ParameterRows items={sections.parameterItems} selectable selectedKeys={selectedKeys} onToggleKey={onToggleKey} />
+      <PriceBreakRows items={sections.priceBreakItems} selectable selectedKeys={selectedKeys} onToggleKey={onToggleKey} />
     </Stack>
   );
 }
@@ -851,6 +1024,7 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
   const [bulkResult, setBulkResult] = useState<BulkResponse | null>(null);
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkMode, setBulkMode] = useState<'preview' | 'apply'>('preview');
+  const [bulkSelectedKeys, setBulkSelectedKeys] = useState<Record<string, Set<string>>>({});
 
   /* -- fetch parts in category -- */
   useEffect(() => {
@@ -922,30 +1096,98 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
     });
   }, []);
 
+  /* -- bulk key selection helper -- */
+  const toggleBulkKey = useCallback((resultKey: string, key: string) => {
+    setBulkSelectedKeys((prev) => {
+      const next = { ...prev };
+      const keys = new Set(next[resultKey] ?? new Set());
+      if (keys.has(key)) keys.delete(key);
+      else keys.add(key);
+      next[resultKey] = keys;
+      return next;
+    });
+  }, []);
+
   /* -- bulk operations -- */
   const canOperate = selectedPartIds.size > 0 && selectedProviderSlugs.length > 0;
 
-  const runBulk = useCallback(async (mode: 'preview' | 'apply') => {
+  const runBulkPreview = useCallback(async () => {
     if (!canOperate) return;
     setBulkLoading(true);
-    setBulkMode(mode);
+    setBulkMode('preview');
     setBulkResult(null);
     try {
-      const endpoint = mode === 'preview' ? 'bulk/preview/' : 'bulk/apply/';
       const response = await context.api.post<BulkResponse>(
-        pluginApi(pluginSlug, endpoint),
+        pluginApi(pluginSlug, 'bulk/preview/'),
         { part_ids: Array.from(selectedPartIds), provider_slugs: selectedProviderSlugs },
       );
       setBulkResult(response.data);
-    } catch (err) {
+      const init: Record<string, Set<string>> = {};
+      for (const result of response.data.results) {
+        const resultKey = `${result.part_id}-${result.provider_slug}`;
+        init[resultKey] = getSelectableResultKeys(result);
+      }
+      setBulkSelectedKeys(init);
+    } catch {
       setBulkResult({
         results: [],
         summary: { requested_parts: selectedPartIds.size, provider_count: selectedProviderSlugs.length, operations: 0, failed: 1, succeeded: 0 },
       });
+      setBulkSelectedKeys({});
     } finally {
       setBulkLoading(false);
     }
   }, [canOperate, context.api, pluginSlug, selectedPartIds, selectedProviderSlugs]);
+
+  const totalSelectedKeys = useMemo(() => {
+    let count = 0;
+    for (const keys of Object.values(bulkSelectedKeys)) {
+      count += keys.size;
+    }
+    return count;
+  }, [bulkSelectedKeys]);
+
+  const runBulkApply = useCallback(async () => {
+    if (!bulkResult) return;
+
+    const operations = bulkResult.results
+      .map((result) => {
+        const resultKey = `${result.part_id}-${result.provider_slug}`;
+        const keys = bulkSelectedKeys[resultKey];
+        return {
+          part_id: result.part_id,
+          provider_slug: result.provider_slug,
+          selected_keys: keys ? expandSelectedKeysForApply(result, keys) : [],
+        };
+      })
+      .filter((op) => op.selected_keys.length > 0);
+
+    if (operations.length === 0) return;
+
+    setBulkLoading(true);
+    try {
+      const response = await context.api.post<BulkResponse>(
+        pluginApi(pluginSlug, 'bulk/apply/'),
+        { operations },
+      );
+      setBulkResult(response.data);
+      setBulkMode('apply');
+      setBulkSelectedKeys({});
+    } catch {
+      setBulkResult({
+        results: [],
+        summary: {
+          requested_parts: operations.length,
+          provider_count: new Set(operations.map((o) => o.provider_slug)).size,
+          operations: operations.length,
+          failed: operations.length,
+          succeeded: 0,
+        },
+      });
+    } finally {
+      setBulkLoading(false);
+    }
+  }, [bulkResult, bulkSelectedKeys, context.api, pluginSlug]);
 
   /* -- loading state -- */
   if (partsLoading) {
@@ -1015,19 +1257,9 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
                   variant="light"
                   disabled={!canOperate}
                   loading={bulkLoading && bulkMode === 'preview'}
-                  onClick={() => { void runBulk('preview'); }}
+                  onClick={() => { void runBulkPreview(); }}
                 >
                   Preview selected
-                </Button>
-              </Tooltip>
-              <Tooltip label={`Apply changes to ${selectedPartIds.size} part(s)`}>
-                <Button
-                  size="xs"
-                  disabled={!canOperate}
-                  loading={bulkLoading && bulkMode === 'apply'}
-                  onClick={() => { void runBulk('apply'); }}
-                >
-                  Apply selected
                 </Button>
               </Tooltip>
             </Group>
@@ -1085,7 +1317,7 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
       {/* Bulk results modal */}
       <Modal
         opened={bulkLoading || bulkResult !== null}
-        onClose={() => { if (!bulkLoading) setBulkResult(null); }}
+        onClose={() => { if (!bulkLoading) { setBulkResult(null); setBulkSelectedKeys({}); } }}
         title={bulkMode === 'preview' ? 'Bulk Preview Results' : 'Bulk Apply Results'}
         size="xl"
       >
@@ -1114,20 +1346,32 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
             {/* Per-part results */}
             <ScrollArea.Autosize mah={400}>
               <Stack gap="sm">
-                {bulkResult.results.map((result) => (
-                  <Card
-                    key={`${result.part_id}-${result.provider_slug}`}
-                    withBorder
-                    radius="sm"
-                    padding="sm"
-                  >
-                    <Group gap="xs" mb={4}>
-                      <Text size="sm" fw={600}>Part #{result.part_id}</Text>
-                      <Badge size="sm" variant="dot">{result.provider_name}</Badge>
-                    </Group>
-                    <CompactStructuredPreview result={result} />
-                  </Card>
-                ))}
+                {bulkResult.results.map((result) => {
+                  const resultKey = `${result.part_id}-${result.provider_slug}`;
+                  const selectedKeys = bulkSelectedKeys[resultKey] ?? new Set<string>();
+                  return (
+                    <Card
+                      key={resultKey}
+                      withBorder
+                      radius="sm"
+                      padding="sm"
+                    >
+                      <Group gap="xs" mb={4}>
+                        <Text size="sm" fw={600}>Part #{result.part_id}</Text>
+                        <Badge size="sm" variant="dot">{result.provider_name}</Badge>
+                      </Group>
+                      {bulkMode === 'preview' ? (
+                        <BulkStructuredPreview
+                          result={result}
+                          selectedKeys={selectedKeys}
+                          onToggleKey={(key) => toggleBulkKey(resultKey, key)}
+                        />
+                      ) : (
+                        <StructuredPreview result={result} />
+                      )}
+                    </Card>
+                  );
+                })}
 
                 {bulkResult.results.length === 0 && (
                   <Text c="dimmed" size="sm" ta="center">No results returned.</Text>
@@ -1136,9 +1380,17 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
             </ScrollArea.Autosize>
 
             <Group justify="flex-end">
-              <Button variant="default" onClick={() => setBulkResult(null)}>
+              <Button variant="default" onClick={() => { setBulkResult(null); setBulkSelectedKeys({}); }}>
                 Close
               </Button>
+              {bulkMode === 'preview' && (
+                <Button
+                  onClick={() => { void runBulkApply(); }}
+                  disabled={totalSelectedKeys === 0}
+                >
+                  Apply selected ({totalSelectedKeys})
+                </Button>
+              )}
             </Group>
           </Stack>
         )}

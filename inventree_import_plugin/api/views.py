@@ -8,6 +8,7 @@ from inventree_import_plugin.services import (
     bulk_enrich,
     enrich_part_for_provider,
     get_provider_state,
+    parse_bulk_operations,
     parse_bulk_payload,
 )
 
@@ -47,10 +48,13 @@ def build_urlpatterns(plugin: Any) -> list[Any]:
     class _BulkApplyView(_BaseRoleView):
         def post(inner_self, request: Any) -> Any:  # noqa: N805
             try:
+                if "operations" in request.data:
+                    operations = parse_bulk_operations(plugin, request)
+                    return Response(bulk_enrich(plugin, dry_run=False, operations=operations))
                 part_ids, provider_slugs = parse_bulk_payload(plugin, request)
+                return Response(bulk_enrich(plugin, part_ids, provider_slugs, dry_run=False))
             except ValueError as exc:
                 return Response({"detail": str(exc)}, status=400)
-            return Response(bulk_enrich(plugin, part_ids, provider_slugs, dry_run=False))
 
     class _BulkPageView(_BaseRoleView):
         _bundle_path = (
