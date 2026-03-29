@@ -62,7 +62,7 @@ def build_urlpatterns(plugin: Any) -> list[Any]:
             ]
 
             context = {
-                "bundle_url": plugin.plugin_static_file("bulk/StandaloneBulkPage.js"),
+                "bundle_url": plugin.plugin_static_file("bulk/StandaloneBulkPage-v2.js"),
                 "mount_context_json": json.dumps(
                     {
                         "pluginSlug": plugin.SLUG,

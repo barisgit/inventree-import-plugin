@@ -14,7 +14,7 @@ export default defineConfig({
       output: {
         dir: '../inventree_import_plugin/static/bulk',
         format: 'es',
-        entryFileNames: '[name].js',
+        entryFileNames: 'StandaloneBulkPage-v2.js',
         assetFileNames: 'assets/[name].[ext]',
       },
     },
