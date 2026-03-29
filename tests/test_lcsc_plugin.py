@@ -1,4 +1,4 @@
-"""Tests for LCSCImportPlugin (lcsc_plugin.py)."""
+"""Tests for LCSCImportPlugin (lcsc_plugin.py) and LCSC price-break parsing."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import pytest
 from inventree_import_plugin.base import SearchResult
 from inventree_import_plugin.lcsc_plugin import LCSCImportPlugin
 from inventree_import_plugin.models import PartData, PriceBreak
+from inventree_import_plugin.suppliers.lcsc import _parse_price_breaks
 
 
 @pytest.fixture()
@@ -244,3 +245,156 @@ class TestPluginMetadata:
     def test_download_images_default_true(self) -> None:
         plugin = LCSCImportPlugin()
         assert plugin.get_setting("DOWNLOAD_IMAGES", True) is True
+
+
+# ---------------------------------------------------------------------------
+# Price-break currency parsing (_parse_price_breaks)
+# ---------------------------------------------------------------------------
+
+
+def _make_product(
+    price_list: list[dict],
+    *,
+    currency_code: str = "",
+) -> dict:
+    """Build a minimal product dict with the given price list and optional currency."""
+    product: dict = {
+        "productCode": "C12345",
+        "productPriceList": price_list,
+    }
+    if currency_code:
+        product["currencyCode"] = currency_code
+    return product
+
+
+class TestParsePriceBreaksUSD:
+    """USD payloads: productPrice is used, currency labeled USD."""
+
+    _usd_list = [
+        {"ladder": "1", "productPrice": "0.50"},
+        {"ladder": "10", "productPrice": "0.40"},
+        {"ladder": "100", "productPrice": "0.30"},
+    ]
+
+    def test_uses_product_price(self) -> None:
+        result = _parse_price_breaks(_make_product(self._usd_list), "C12345")
+        assert [b.price for b in result] == [0.50, 0.40, 0.30]
+
+    def test_labels_usd(self) -> None:
+        result = _parse_price_breaks(_make_product(self._usd_list), "C12345")
+        assert all(b.currency == "USD" for b in result)
+
+    def test_quantities_correct(self) -> None:
+        result = _parse_price_breaks(_make_product(self._usd_list), "C12345")
+        assert [b.quantity for b in result] == [1, 10, 100]
+
+    def test_explicit_usd_currency_code(self) -> None:
+        product = _make_product(self._usd_list, currency_code="USD")
+        result = _parse_price_breaks(product, "C12345")
+        assert all(b.currency == "USD" for b in result)
+
+
+class TestParsePriceBreaksEUR:
+    """EUR payloads: currencyPrice is used, currency labeled EUR.
+
+    When the EUR cookie is active, LCSC returns both productPrice (USD base)
+    and currencyPrice (EUR converted) with currencyCode on each entry or
+    at the product level.
+    """
+
+    _eur_entry_list = [
+        {
+            "ladder": "1",
+            "productPrice": "0.50",
+            "currencyPrice": "0.46",
+            "currencyCode": "EUR",
+        },
+        {
+            "ladder": "10",
+            "productPrice": "0.40",
+            "currencyPrice": "0.37",
+            "currencyCode": "EUR",
+        },
+        {
+            "ladder": "100",
+            "productPrice": "0.30",
+            "currencyPrice": "0.28",
+            "currencyCode": "EUR",
+        },
+    ]
+
+    def test_uses_currency_price_not_product_price(self) -> None:
+        result = _parse_price_breaks(_make_product(self._eur_entry_list), "C12345")
+        assert [b.price for b in result] == [0.46, 0.37, 0.28]
+
+    def test_labels_eur(self) -> None:
+        result = _parse_price_breaks(_make_product(self._eur_entry_list), "C12345")
+        assert all(b.currency == "EUR" for b in result)
+
+    def test_product_level_currency_code(self) -> None:
+        """currencyCode on product root (no per-entry code) is still respected."""
+        price_list = [
+            {"ladder": "1", "productPrice": "0.50", "currencyPrice": "0.46"},
+            {"ladder": "10", "productPrice": "0.40", "currencyPrice": "0.37"},
+        ]
+        product = _make_product(price_list, currency_code="EUR")
+        result = _parse_price_breaks(product, "C12345")
+        assert all(b.currency == "EUR" for b in result)
+        assert [b.price for b in result] == [0.46, 0.37]
+
+    def test_entry_code_overrides_product_code(self) -> None:
+        """Per-entry currencyCode takes precedence over product-level."""
+        price_list = [
+            {
+                "ladder": "1",
+                "productPrice": "0.50",
+                "currencyPrice": "0.46",
+                "currencyCode": "EUR",
+            },
+        ]
+        product = _make_product(price_list, currency_code="GBP")
+        result = _parse_price_breaks(product, "C12345")
+        assert result[0].currency == "EUR"
+
+
+class TestParsePriceBreaksEdgeCases:
+    def test_empty_price_list_returns_empty(self) -> None:
+        result = _parse_price_breaks(_make_product([]), "C12345")
+        assert result == []
+
+    def test_missing_price_list_key_returns_empty(self) -> None:
+        result = _parse_price_breaks({"productCode": "C12345"}, "C12345")
+        assert result == []
+
+    def test_malformed_entry_skipped(self) -> None:
+        product = _make_product(
+            [
+                {"ladder": "1", "productPrice": "0.50"},
+                {"ladder": "bad"},  # missing productPrice
+                {"ladder": "10", "productPrice": "0.40"},
+            ]
+        )
+        result = _parse_price_breaks(product, "C12345")
+        assert len(result) == 2
+        assert result[0].quantity == 1
+        assert result[1].quantity == 10
+
+    def test_numeric_price_accepted(self) -> None:
+        product = _make_product([{"ladder": "1", "productPrice": 0.25}])
+        result = _parse_price_breaks(product, "C12345")
+        assert result[0].price == 0.25
+
+    def test_comma_decimal_separator(self) -> None:
+        product = _make_product([{"ladder": "1", "productPrice": "0,50"}])
+        result = _parse_price_breaks(product, "C12345")
+        assert result[0].price == 0.50
+
+    def test_eur_without_currency_price_falls_back_to_product_price(self) -> None:
+        """If currencyCode is EUR but currencyPrice is missing, use productPrice."""
+        product = _make_product(
+            [{"ladder": "1", "productPrice": "0.50"}],
+            currency_code="EUR",
+        )
+        result = _parse_price_breaks(product, "C12345")
+        assert result[0].price == 0.50
+        assert result[0].currency == "EUR"

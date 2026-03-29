@@ -5,7 +5,10 @@ Provides two public functions:
 - fetch_lcsc_part(code)     -- full part detail via GET
 
 No authentication is required. A browser-like User-Agent and EUR currency
-cookie are set to match normal browser behaviour.
+cookie are set to match normal browser behaviour.  Price-break parsing reads
+the ``currencyCode`` / ``currencyPrice`` fields from the API response so the
+correct numeric amount and currency label are used regardless of which
+currency the cookie requests.
 """
 
 from __future__ import annotations
@@ -132,16 +135,38 @@ def _map_to_part_data(product: dict[str, Any]) -> PartData:
 
 
 def _parse_price_breaks(product: dict[str, Any], sku: str) -> list[PriceBreak]:
+    """Extract price breaks using the supplier-provided currency.
+
+    LCSC returns ``productPrice`` (always USD-base) and optionally
+    ``currencyPrice`` (converted to the currency requested via cookie).
+    Each entry (or the product root) carries ``currencyCode`` indicating
+    which currency ``currencyPrice`` is expressed in.
+
+    When ``currencyCode`` is present and not USD we prefer ``currencyPrice``;
+    otherwise we fall back to ``productPrice`` and label it USD.
+    """
     breaks: list[PriceBreak] = []
+    product_currency = (product.get("currencyCode") or "").upper()
+
     for entry in product.get("productPriceList") or []:
         try:
             qty = int(entry["ladder"])
-            raw_price = entry["productPrice"]
+            entry_currency = (entry.get("currencyCode") or product_currency or "USD").upper()
+
+            # currencyPrice is the amount converted to the requested currency;
+            # productPrice is always the USD base price.
+            if entry_currency != "USD" and "currencyPrice" in entry:
+                raw_price = entry["currencyPrice"]
+            else:
+                raw_price = entry["productPrice"]
+                entry_currency = entry_currency or "USD"
+
             if isinstance(raw_price, str):
                 price = float(raw_price.replace(",", "."))
             else:
                 price = float(raw_price)
-            breaks.append(PriceBreak(quantity=qty, price=price, currency="EUR"))
+
+            breaks.append(PriceBreak(quantity=qty, price=price, currency=entry_currency))
         except (KeyError, TypeError, ValueError) as exc:
             logger.warning("Skipping unparseable price entry for %s: %s (%s)", sku, entry, exc)
     return breaks

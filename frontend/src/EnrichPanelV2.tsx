@@ -46,7 +46,14 @@ type DiffFieldEntry = {
   field: string;
   current: string | null;
   incoming: string | null;
-  status: 'new' | 'skipped';
+  status: 'new' | 'skipped' | 'updated';
+};
+
+type DiffSupplierPartRow = {
+  field: string;
+  current: string | null;
+  incoming: string | null;
+  status: 'new' | 'skipped' | 'updated';
 };
 
 type DiffParameterRow = {
@@ -69,6 +76,7 @@ type DiffPayload = {
   datasheet: DiffFieldEntry | null;
   price_breaks: DiffPriceBreakRow[];
   parameters: DiffParameterRow[];
+  supplier_part: DiffSupplierPartRow[];
 };
 
 type EnrichResult = {
@@ -133,10 +141,16 @@ type RichPriceBreakItem = ParsedItem & {
   incomingCurrency: string | null;
 };
 
+type RichSupplierPartItem = ParsedItem & {
+  currentValue: string | null;
+  incomingValue: string | null;
+};
+
 type ParsedSections = {
   assets: ParsedItem[];
   parameters: ParsedItem[];
   priceBreaks: ParsedItem[];
+  supplierParts: ParsedItem[];
 };
 
 const STATUS_COLOR: Record<ItemStatus, string> = {
@@ -149,6 +163,12 @@ const STATUS_LABEL: Record<ItemStatus, string> = {
   update: 'Will update',
   skip: 'Already set',
   error: 'Error',
+};
+
+const SUPPLIER_PART_FIELD_LABELS: Record<string, string> = {
+  description: 'Supplier description',
+  link: 'Supplier link',
+  available: 'Available quantity',
 };
 
 /** Resolve the authoritative status for a key from the EnrichResult lists. */
@@ -169,11 +189,15 @@ function classifyKey(raw: string): { section: keyof ParsedSections; label: strin
     const name = raw.slice('parameter:'.length);
     return { section: 'parameters', label: name };
   }
+  if (raw.startsWith('supplier_part:')) {
+    const field = raw.slice('supplier_part:'.length);
+    return { section: 'supplierParts', label: SUPPLIER_PART_FIELD_LABELS[field] ?? field };
+  }
   return { section: 'assets', label: raw };
 }
 
 function parseResultKeys(result: EnrichResult): ParsedSections {
-  const sections: ParsedSections = { assets: [], parameters: [], priceBreaks: [] };
+  const sections: ParsedSections = { assets: [], parameters: [], priceBreaks: [], supplierParts: [] };
 
   for (const key of result.updated) {
     const { section, label } = classifyKey(key);
@@ -249,6 +273,21 @@ function buildPriceBreakItems(result: EnrichResult): RichPriceBreakItem[] {
     status: authoritativeStatus(`price_break:${row.quantity}`, result),
     incomingPrice: row.incoming_price,
     incomingCurrency: row.incoming_currency,
+  }));
+}
+
+function buildSupplierPartItems(result: EnrichResult): RichSupplierPartItem[] {
+  const diff = result.diff;
+  if (!diff) {
+    const sections = parseResultKeys(result);
+    return sections.supplierParts.map((item) => ({ ...item, currentValue: null, incomingValue: null }));
+  }
+  return diff.supplier_part.map((row) => ({
+    key: `supplier_part:${row.field}`,
+    label: SUPPLIER_PART_FIELD_LABELS[row.field] ?? row.field,
+    status: authoritativeStatus(`supplier_part:${row.field}`, result),
+    currentValue: row.current != null ? String(row.current) : null,
+    incomingValue: row.incoming != null ? String(row.incoming) : null,
   }));
 }
 
@@ -428,10 +467,51 @@ function PriceBreakRows({ items }: { items: RichPriceBreakItem[] }) {
   );
 }
 
+function SupplierPartRows({ items }: { items: RichSupplierPartItem[] }) {
+  if (items.length === 0) return null;
+  const hasRichData = items.some((i) => i.currentValue !== null || i.incomingValue !== null);
+  const updates = items.filter((i) => i.status === 'update');
+  const skips = items.filter((i) => i.status === 'skip');
+  const sorted = [...updates, ...skips];
+  return (
+    <Stack gap={4}>
+      <SectionHeader label="Supplier Part" count={items.length} />
+      <Table withTableBorder withColumnBorders verticalSpacing={4} horizontalSpacing="sm">
+        <Table.Thead>
+          <Table.Tr>
+            <Table.Th><Text size="xs" fw={600}>Field</Text></Table.Th>
+            {hasRichData && <Table.Th><Text size="xs" fw={600}>Current</Text></Table.Th>}
+            {hasRichData && <Table.Th><Text size="xs" fw={600}>Incoming</Text></Table.Th>}
+            <Table.Th w={100}><Text size="xs" fw={600}>Status</Text></Table.Th>
+          </Table.Tr>
+        </Table.Thead>
+        <Table.Tbody>
+          {sorted.map((item) => (
+            <Table.Tr
+              key={item.key}
+              bg={item.status === 'update' ? 'var(--mantine-color-green-light)' : undefined}
+            >
+              <Table.Td><Text size="sm">{item.label}</Text></Table.Td>
+              {hasRichData && (
+                <Table.Td><DiffValue value={item.currentValue} side="current" /></Table.Td>
+              )}
+              {hasRichData && (
+                <Table.Td><DiffValue value={item.incomingValue} side="incoming" /></Table.Td>
+              )}
+              <Table.Td><StatusBadge status={item.status} /></Table.Td>
+            </Table.Tr>
+          ))}
+        </Table.Tbody>
+      </Table>
+    </Stack>
+  );
+}
+
 function StructuredPreview({ result }: { result: EnrichResult }) {
   const assetItems = useMemo(() => buildAssetItems(result), [result]);
   const parameterItems = useMemo(() => buildParameterItems(result), [result]);
   const priceBreakItems = useMemo(() => buildPriceBreakItems(result), [result]);
+  const supplierPartItems = useMemo(() => buildSupplierPartItems(result), [result]);
 
   if (!hasAnyContent(result)) {
     return (
@@ -469,6 +549,7 @@ function StructuredPreview({ result }: { result: EnrichResult }) {
       <Divider />
 
       <AssetRows items={assetItems} />
+      <SupplierPartRows items={supplierPartItems} />
       <ParameterRows items={parameterItems} />
       <PriceBreakRows items={priceBreakItems} />
     </Stack>
@@ -523,6 +604,14 @@ function CompactStructuredPreview({ result }: { result: EnrichResult }) {
               Prices: {diff.price_breaks.filter((p) => !result.skipped.includes(`price_break:${p.quantity}`)).map((p) => `${p.quantity}× ${p.incoming_currency} ${p.incoming_price}`).join(', ')}
             </Text>
           )}
+          {diff.supplier_part.filter((sp) => !result.skipped.includes(`supplier_part:${sp.field}`)).length > 0 && (
+            <Text size="xs" c="green.7">
+              Supplier: {diff.supplier_part.filter((sp) => !result.skipped.includes(`supplier_part:${sp.field}`)).map((sp) => {
+                const label = SUPPLIER_PART_FIELD_LABELS[sp.field] ?? sp.field;
+                return `${label}: ${sp.current ?? '-'} → ${sp.incoming ?? '-'}`;
+              }).join(', ')}
+            </Text>
+          )}
         </>
       ) : (
         /* Fallback: old key-based parsing */
@@ -543,6 +632,11 @@ function CompactStructuredPreview({ result }: { result: EnrichResult }) {
               {sections.priceBreaks.filter((i) => i.status === 'update').length > 0 && (
                 <Text size="xs" c="green.7">
                   Prices: {sections.priceBreaks.filter((i) => i.status === 'update').map((i) => i.label).join(', ')}
+                </Text>
+              )}
+              {sections.supplierParts.filter((i) => i.status === 'update').length > 0 && (
+                <Text size="xs" c="green.7">
+                  Supplier: {sections.supplierParts.filter((i) => i.status === 'update').map((i) => i.label).join(', ')}
                 </Text>
               )}
             </>
