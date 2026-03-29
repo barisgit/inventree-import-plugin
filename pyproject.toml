@@ -17,8 +17,6 @@ dev = ["pytest", "pytest-cov", "ruff", "mypy"]
 
 [project.entry-points."inventree_plugins"]
 InvenTreeImportPlugin = "inventree_import_plugin.core:InvenTreeImportPlugin"
-MouserImportPlugin = "inventree_import_plugin.mouser_plugin:MouserImportPlugin"
-LCSCImportPlugin = "inventree_import_plugin.lcsc_plugin:LCSCImportPlugin"
 
 [tool.setuptools.packages.find]
 where = ["."]

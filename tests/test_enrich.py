@@ -82,34 +82,28 @@ def lcsc_plugin() -> LCSCImportPlugin:
 
 
 class TestGetUiPanels:
+    """Legacy plugins no longer register UI panels (handled by InvenTreeImportPlugin)."""
+
+    def test_mouser_returns_empty_for_part_model(self, mouser_plugin: MouserImportPlugin) -> None:
+        result = mouser_plugin.get_ui_panels(None, {"target_model": "part"})
+        assert result == []
+
     def test_mouser_returns_empty_for_non_part_model(
         self, mouser_plugin: MouserImportPlugin
     ) -> None:
         result = mouser_plugin.get_ui_panels(None, {"target_model": "stockitem"})
         assert result == []
 
-    def test_mouser_returns_panel_for_part_model(self, mouser_plugin: MouserImportPlugin) -> None:
-        mouser_plugin.plugin_static_file = lambda f: f"static/{f}"  # type: ignore[method-assign]
-        panels = mouser_plugin.get_ui_panels(None, {"target_model": "part"})
-        assert len(panels) == 1
-        assert panels[0]["key"] == "mouser-enrich"
-        assert panels[0]["context"]["supplier_name"] == "Mouser"
-        assert panels[0]["context"]["plugin_slug"] == "mouser-import"
+    def test_mouser_returns_empty_for_none_context(self, mouser_plugin: MouserImportPlugin) -> None:
+        result = mouser_plugin.get_ui_panels(None, None)
+        assert result == []
+
+    def test_lcsc_returns_empty_for_part_model(self, lcsc_plugin: LCSCImportPlugin) -> None:
+        result = lcsc_plugin.get_ui_panels(None, {"target_model": "part"})
+        assert result == []
 
     def test_lcsc_returns_empty_for_non_part_model(self, lcsc_plugin: LCSCImportPlugin) -> None:
         result = lcsc_plugin.get_ui_panels(None, {"target_model": "company"})
-        assert result == []
-
-    def test_lcsc_returns_panel_for_part_model(self, lcsc_plugin: LCSCImportPlugin) -> None:
-        lcsc_plugin.plugin_static_file = lambda f: f"static/{f}"  # type: ignore[method-assign]
-        panels = lcsc_plugin.get_ui_panels(None, {"target_model": "part"})
-        assert len(panels) == 1
-        assert panels[0]["key"] == "lcsc-enrich"
-        assert panels[0]["context"]["supplier_name"] == "LCSC"
-        assert panels[0]["context"]["plugin_slug"] == "lcsc-import"
-
-    def test_none_context_returns_empty(self, mouser_plugin: MouserImportPlugin) -> None:
-        result = mouser_plugin.get_ui_panels(None, None)
         assert result == []
 
 

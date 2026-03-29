@@ -46,18 +46,8 @@ class LCSCImportPlugin(BaseImportPlugin):
     def get_ui_panels(
         self, request: Any, context: dict[str, Any] | None = None, **kwargs: Any
     ) -> list[dict[str, Any]]:
-        """Return a Part-detail panel for enriching from LCSC."""
-        if (context or {}).get("target_model") != "part":
-            return []
-        return [
-            {
-                "key": "lcsc-enrich",
-                "title": "Enrich from LCSC",
-                "icon": "ti:refresh:outline",
-                "source": self.plugin_static_file("enrich_panel_v2.js:renderEnrichPanel"),
-                "context": {"plugin_slug": self.SLUG, "supplier_name": "LCSC"},
-            }
-        ]
+        """UI panels are now served by the combined InvenTreeImportPlugin."""
+        return []
 
     # ------------------------------------------------------------------
     # SupplierMixin interface
