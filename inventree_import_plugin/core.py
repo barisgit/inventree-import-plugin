@@ -169,7 +169,7 @@ class InvenTreeImportPlugin(BaseImportPlugin):
                 "title": title,
                 "description": description,
                 "icon": "ti:refresh-dot:outline",
-                "source": self.plugin_static_file("Panel.js:renderEnrichPanel"),
+                "source": self.plugin_static_file("EnrichPanel.js:renderEnrichPanel"),
                 "context": {"plugin_slug": self.SLUG},
             }
         ]

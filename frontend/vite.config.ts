@@ -25,7 +25,7 @@ export default defineConfig({
     sourcemap: true,
     rollupOptions: {
       preserveEntrySignatures: 'exports-only',
-      input: ['./src/Panel.tsx', './src/Settings.tsx'],
+      input: ['./src/EnrichPanel.tsx', './src/Settings.tsx'],
       output: [
         {
           dir: '../inventree_import_plugin/static',

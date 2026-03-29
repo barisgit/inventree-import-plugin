@@ -1,8 +1,8 @@
 {
-  "src/Panel.tsx": {
-    "file": "Panel-BzaX27yJ.js",
-    "name": "Panel",
-    "src": "src/Panel.tsx",
+  "src/EnrichPanel.tsx": {
+    "file": "EnrichPanel-BzaX27yJ.js",
+    "name": "EnrichPanel",
+    "src": "src/EnrichPanel.tsx",
     "isEntry": true
   },
   "src/Settings.tsx": {
