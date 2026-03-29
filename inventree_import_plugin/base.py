@@ -8,9 +8,60 @@ from inventree_import_plugin import PLUGIN_VERSION
 from inventree_import_plugin.compat import SearchResult, Supplier
 from inventree_import_plugin.models import PartData
 
-__all__ = ["BaseImportPlugin", "SearchResult", "Supplier"]
+__all__ = [
+    "BaseImportPlugin",
+    "SearchResult",
+    "Supplier",
+    "supplier_part_defaults",
+    "supplier_part_update_values",
+]
 
 logger = logging.getLogger("inventree_import_plugin")
+
+
+def supplier_part_defaults(data: PartData) -> dict[str, Any]:
+    """Build SupplierPart ``defaults`` dict from *data*.
+
+    Extracts supplier-owned fields that should be persisted on every
+    ``SupplierPart`` record: ``description``, ``link``, and ``available``.
+
+    Stock / availability fields are only included when the provider
+    supplies a non-zero ``stock`` value in ``extra_data``.
+    """
+    defaults: dict[str, Any] = {"link": data.link}
+
+    if data.description:
+        defaults["description"] = data.description
+
+    stock = data.extra_data.get("stock")
+    if isinstance(stock, int) and stock > 0:
+        defaults["available"] = stock
+
+    return defaults
+
+
+def supplier_part_update_values(
+    supplier_part: Any, data: PartData
+) -> tuple[dict[str, Any], int | None]:
+    """Return changed regular SupplierPart fields and availability quantity."""
+    regular_updates: dict[str, Any] = {}
+    available_quantity: int | None = None
+
+    for field, value in supplier_part_defaults(data).items():
+        if not value:
+            continue
+
+        current = getattr(supplier_part, field, None)
+
+        if field == "available":
+            if current != value:
+                available_quantity = value
+            continue
+
+        if current != value:
+            regular_updates[field] = value
+
+    return regular_updates, available_quantity
 
 
 def _download_and_set_image(part: Any, image_url: str) -> None:
@@ -182,12 +233,31 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
     ) -> Any:
         from company.models import SupplierPart
 
-        supplier_part, _ = SupplierPart.objects.get_or_create(
+        defaults = supplier_part_defaults(data)
+        defaults["manufacturer_part"] = manufacturer_part
+
+        supplier_part, created = SupplierPart.objects.get_or_create(
             part=part,
             supplier=self.supplier_company,
             SKU=data.sku,
-            defaults={"manufacturer_part": manufacturer_part, "link": data.link},
+            defaults=defaults,
         )
+
+        if not created:
+            regular_updates, available_quantity = supplier_part_update_values(supplier_part, data)
+
+            if regular_updates:
+                for field, value in regular_updates.items():
+                    setattr(supplier_part, field, value)
+                supplier_part.save(update_fields=list(regular_updates.keys()))
+
+            if available_quantity is not None:
+                if hasattr(supplier_part, "update_available_quantity"):
+                    supplier_part.update_available_quantity(available_quantity)
+                else:
+                    supplier_part.available = available_quantity
+                    supplier_part.save(update_fields=["available"])
+
         return supplier_part
 
     # ------------------------------------------------------------------
@@ -195,9 +265,12 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
     # ------------------------------------------------------------------
 
     def _enrich_part(self, part_id: int, *, dry_run: bool = False) -> dict[str, Any]:
-        """Fetch fresh supplier data and fill any gaps on an existing part.
+        """Fetch fresh supplier data and update supplier-owned fields.
 
-        Only fills missing data — does not overwrite user-edited fields.
+        Supplier-owned fields (description, link) are updated when the
+        supplier provides a different value.  Availability is updated when
+        stock is present and has changed.  Other fields (image, datasheet,
+        parameters) are only added when missing.
 
         When *dry_run* is ``True`` the method computes what *would* change
         without persisting anything, and returns the preview dict.
@@ -247,6 +320,28 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
                 "skipped": [],
                 "errors": [f"No data returned for SKU {supplier_part.SKU}"],
             }
+
+        # SupplierPart supplier-owned fields — update when values change
+        regular_updates, available_quantity = supplier_part_update_values(supplier_part, fresh)
+
+        for field in regular_updates:
+            updated.append(f"supplier_part:{field}")
+
+        if available_quantity is not None:
+            updated.append("supplier_part:available")
+
+        if not dry_run:
+            if regular_updates:
+                for field, value in regular_updates.items():
+                    setattr(supplier_part, field, value)
+                supplier_part.save(update_fields=list(regular_updates.keys()))
+
+            if available_quantity is not None:
+                if hasattr(supplier_part, "update_available_quantity"):
+                    supplier_part.update_available_quantity(available_quantity)
+                else:
+                    supplier_part.available = available_quantity
+                    supplier_part.save(update_fields=["available"])
 
         # Image — only if the part has none
         if fresh.image_url and not part.image:

@@ -167,6 +167,7 @@ _FRESH_DATA = PartData(
     description="Dual op-amp",
     manufacturer_name="TI",
     manufacturer_part_number="LM358",
+    link="https://example.com/part/C12345",
     image_url="https://example.com/img.jpg",
     datasheet_url="https://example.com/ds.pdf",
     price_breaks=[PriceBreak(quantity=1, price=0.15), PriceBreak(quantity=10, price=0.12)],
@@ -394,6 +395,130 @@ class TestEnrichPart:
 
 
 # ---------------------------------------------------------------------------
+# SupplierPart field enrichment in base._enrich_part
+# ---------------------------------------------------------------------------
+
+
+class TestEnrichSupplierPartFields:
+    """SupplierPart description/link/available are updated when values change."""
+
+    _DL_PATCH = "inventree_import_plugin.base._download_and_set_image"
+
+    def _run(self, plugin, *, supplier_part=None, fresh_data=None, dry_run=False):
+        helper = TestEnrichPart()
+        return helper._run(
+            plugin,
+            supplier_part=supplier_part,
+            fresh_data=fresh_data or _FRESH_DATA,
+            dry_run=dry_run,
+        )
+
+    def test_supplier_part_description_updated(self, mouser_plugin: MouserImportPlugin) -> None:
+        sp = _make_supplier_part()
+        sp.description = ""
+        sp.link = "https://already-set.com"
+        result = self._run(mouser_plugin, supplier_part=sp)
+        assert "supplier_part:description" in result["updated"]
+        assert sp.description == _FRESH_DATA.description
+
+    def test_supplier_part_description_updated_when_changed(
+        self, mouser_plugin: MouserImportPlugin
+    ) -> None:
+        sp = _make_supplier_part()
+        sp.description = "Old description"
+        sp.link = _FRESH_DATA.link
+        result = self._run(mouser_plugin, supplier_part=sp)
+        assert "supplier_part:description" in result["updated"]
+        assert sp.description == _FRESH_DATA.description
+        sp.save.assert_called_once()
+
+    def test_supplier_part_link_updated(self, mouser_plugin: MouserImportPlugin) -> None:
+        sp = _make_supplier_part()
+        sp.description = "Already set"
+        sp.link = ""
+        result = self._run(mouser_plugin, supplier_part=sp)
+        assert "supplier_part:link" in result["updated"]
+        assert sp.link == _FRESH_DATA.link
+
+    def test_supplier_part_link_updated_when_changed(
+        self, mouser_plugin: MouserImportPlugin
+    ) -> None:
+        sp = _make_supplier_part()
+        sp.description = _FRESH_DATA.description
+        sp.link = "https://old-link.com"
+        result = self._run(mouser_plugin, supplier_part=sp)
+        assert "supplier_part:link" in result["updated"]
+        assert sp.link == _FRESH_DATA.link
+        sp.save.assert_called_once()
+
+    def test_supplier_part_available_updated_from_stock(
+        self, mouser_plugin: MouserImportPlugin
+    ) -> None:
+        data_with_stock = PartData(
+            sku="C12345",
+            name="LM358",
+            description="Dual op-amp",
+            link="https://example.com",
+            extra_data={"stock": 250},
+        )
+        sp = _make_supplier_part()
+        sp.description = "Already set"
+        sp.link = "https://already.set"
+        sp.available = 0
+        result = self._run(mouser_plugin, supplier_part=sp, fresh_data=data_with_stock)
+        assert "supplier_part:available" in result["updated"]
+        sp.update_available_quantity.assert_called_once_with(250)
+
+    def test_supplier_part_available_updated_when_changed(
+        self, mouser_plugin: MouserImportPlugin
+    ) -> None:
+        data_with_stock = PartData(
+            sku="C12345",
+            name="LM358",
+            description="Dual op-amp",
+            link="https://example.com",
+            extra_data={"stock": 500},
+        )
+        sp = _make_supplier_part()
+        sp.description = _FRESH_DATA.description
+        sp.link = _FRESH_DATA.link
+        sp.available = 250
+        result = self._run(mouser_plugin, supplier_part=sp, fresh_data=data_with_stock)
+        assert "supplier_part:available" in result["updated"]
+        sp.update_available_quantity.assert_called_once_with(500)
+
+    def test_supplier_part_skipped_when_values_match(
+        self, mouser_plugin: MouserImportPlugin
+    ) -> None:
+        sp = _make_supplier_part()
+        sp.description = _FRESH_DATA.description
+        sp.link = _FRESH_DATA.link
+        result = self._run(mouser_plugin, supplier_part=sp)
+        assert "supplier_part:description" not in result["updated"]
+        assert "supplier_part:link" not in result["updated"]
+
+    def test_supplier_part_not_saved_when_no_changes(
+        self, mouser_plugin: MouserImportPlugin
+    ) -> None:
+        sp = _make_supplier_part()
+        sp.description = _FRESH_DATA.description
+        sp.link = _FRESH_DATA.link
+        result = self._run(mouser_plugin, supplier_part=sp)
+        sp.save.assert_not_called()
+
+    def test_preview_reports_supplier_part_without_saving(
+        self, mouser_plugin: MouserImportPlugin
+    ) -> None:
+        sp = _make_supplier_part()
+        sp.description = ""
+        sp.link = ""
+        result = self._run(mouser_plugin, supplier_part=sp, dry_run=True)
+        assert "supplier_part:description" in result["updated"]
+        assert "supplier_part:link" in result["updated"]
+        sp.save.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # dry_run (GET preview) tests
 # ---------------------------------------------------------------------------
 
@@ -541,19 +666,35 @@ class TestDownloadAndSetImage:
         helper_mod.download_image_from_url = MagicMock(return_value=img)  # type: ignore[attr-defined]
         inventree_mod = sys.modules.get("InvenTree", types.ModuleType("InvenTree"))
 
-        with patch.dict(
-            sys.modules, {"InvenTree": inventree_mod, "InvenTree.helpers_model": helper_mod}
-        ):
-            from inventree_import_plugin.base import _download_and_set_image as fn
+        # Stub django.core.files.base.ContentFile so the first code path works
+        django_files_base = types.ModuleType("django.core.files.base")
 
-            fn(part, "https://example.com/test.jpg")
+        class _FakeContentFile:
+            def __init__(self, data):
+                self.data = data
 
-        part.image.save.assert_called_once()
-        args, kwargs = part.image.save.call_args
-        assert args[0].startswith("part_")
-        assert args[0].endswith(".png")
-        assert kwargs == {"save": True}
-        helper_mod.download_image_from_url.assert_called_once_with("https://example.com/test.jpg")
+        django_files_base.ContentFile = _FakeContentFile  # type: ignore[attr-defined]
+        sys.modules["django.core.files.base"] = django_files_base
+
+        try:
+            with patch.dict(
+                sys.modules,
+                {"InvenTree": inventree_mod, "InvenTree.helpers_model": helper_mod},
+            ):
+                from inventree_import_plugin.base import _download_and_set_image as fn
+
+                fn(part, "https://example.com/test.jpg")
+
+            part.image.save.assert_called_once()
+            args, kwargs = part.image.save.call_args
+            assert args[0].startswith("part_")
+            assert args[0].endswith(".png")
+            assert kwargs == {"save": True}
+            helper_mod.download_image_from_url.assert_called_once_with(
+                "https://example.com/test.jpg"
+            )
+        finally:
+            sys.modules.pop("django.core.files.base", None)
 
     def test_falls_back_to_set_image_from_url(self) -> None:
         part = MagicMock()
@@ -655,13 +796,14 @@ class TestEnrichPartForProviderDiff:
         existing_pb_quantities=None,
         param_exists=False,
         part=None,
+        supplier_part=None,
         has_datasheet_attachment=False,
     ):
         from inventree_import_plugin.services.enrich import enrich_part_for_provider
 
         plugin = _MockCorePlugin()
         _part = part or _make_part()
-        _sp = _make_supplier_part()
+        _sp = supplier_part or _make_supplier_part()
 
         with (
             patch(_SVC_PART) as MockPart,
@@ -704,7 +846,13 @@ class TestEnrichPartForProviderDiff:
     def test_diff_has_expected_top_level_keys(self):
         result = self._run(dry_run=True)
         diff = result["diff"]
-        assert set(diff.keys()) == {"image", "datasheet", "price_breaks", "parameters"}
+        assert set(diff.keys()) == {
+            "image",
+            "datasheet",
+            "price_breaks",
+            "parameters",
+            "supplier_part",
+        }
 
     def test_diff_image_when_part_has_no_image(self):
         result = self._run(dry_run=True, part=_make_part(image=""))
@@ -775,3 +923,184 @@ class TestEnrichPartForProviderDiff:
         assert "datasheet_link" in result["updated"]
         assert "price_break:1" in result["updated"]
         assert "parameter:Voltage" in result["updated"]
+
+    def test_diff_supplier_part_fields_when_empty(self):
+        """SupplierPart description/link show as new when currently empty."""
+        sp = _make_supplier_part()
+        sp.description = ""
+        sp.link = ""
+        result = self._run(dry_run=True, supplier_part=sp)
+        sp_rows = result["diff"]["supplier_part"]
+        fields = {r["field"]: r for r in sp_rows}
+        assert "link" in fields
+        assert fields["link"]["status"] == "new"
+        assert "description" in fields
+        assert fields["description"]["status"] == "new"
+
+    def test_diff_supplier_part_fields_when_already_set(self):
+        """SupplierPart fields show as updated when values differ."""
+        sp = _make_supplier_part()
+        sp.description = "Existing description"
+        sp.link = "https://existing.com"
+
+        result = self._run(dry_run=True, supplier_part=sp)
+        sp_rows = result["diff"]["supplier_part"]
+        fields = {r["field"]: r for r in sp_rows}
+        assert fields["link"]["status"] == "updated"
+        assert fields["link"]["current"] == "https://existing.com"
+        assert fields["description"]["status"] == "updated"
+        assert fields["description"]["current"] == "Existing description"
+
+    def test_diff_supplier_part_fields_skipped_when_matching(self):
+        """SupplierPart fields show as skipped when values already match."""
+        sp = _make_supplier_part()
+        sp.description = _FRESH_DATA.description
+        sp.link = _FRESH_DATA.link
+
+        result = self._run(dry_run=True, supplier_part=sp)
+        sp_rows = result["diff"]["supplier_part"]
+        fields = {r["field"]: r for r in sp_rows}
+        assert fields["link"]["status"] == "skipped"
+        assert fields["description"]["status"] == "skipped"
+
+    def test_supplier_part_updated_on_apply(self):
+        """SupplierPart.save() is called with new field values."""
+        from inventree_import_plugin.services.enrich import enrich_part_for_provider
+
+        plugin = _MockCorePlugin()
+        sp = _make_supplier_part()
+        sp.description = ""
+        sp.link = ""
+
+        with (
+            patch(_SVC_PART) as MockPart,
+            patch(_SVC_SP) as MockSP,
+            patch(_SVC_PB) as MockPB,
+            patch(_SVC_CT) as MockContentType,
+            patch(_SVC_TMPL) as MockTmpl,
+            patch(_SVC_PARAM) as MockParam,
+            patch(_SVC_DL),
+            patch(_SVC_ATTACH) as MockAttach,
+            patch.object(plugin, "get_import_data", return_value=_FRESH_DATA),
+        ):
+            MockPart.DoesNotExist = Exception
+            MockPart.objects.get.return_value = _make_part()
+            MockContentType.objects.get_for_model.return_value = "part-content-type"
+            _svc_stub_qs_for_sp(MockSP, sp)
+            _svc_stub_pb_qs(MockPB, [])
+            MockTmpl.objects.get_or_create.return_value = (MagicMock(), True)
+            MockParam.objects.filter.return_value.exists.return_value = False
+            _stub_attachment(MockAttach, has_datasheet=False)
+
+            result = enrich_part_for_provider(plugin, "test-provider", 42, dry_run=False)
+
+        sp.save.assert_called_once()
+        assert sp.description == _FRESH_DATA.description
+        assert sp.link == _FRESH_DATA.link
+
+    def test_supplier_part_available_updated_on_apply(self):
+        """SupplierPart availability uses the model helper when stock changes."""
+        from inventree_import_plugin.services.enrich import enrich_part_for_provider
+
+        plugin = _MockCorePlugin()
+        sp = _make_supplier_part()
+        sp.description = _FRESH_DATA.description
+        sp.link = _FRESH_DATA.link
+        sp.available = 10
+
+        stock_data = PartData(
+            sku=_FRESH_DATA.sku,
+            name=_FRESH_DATA.name,
+            description=_FRESH_DATA.description,
+            manufacturer_name=_FRESH_DATA.manufacturer_name,
+            manufacturer_part_number=_FRESH_DATA.manufacturer_part_number,
+            link=_FRESH_DATA.link,
+            image_url=_FRESH_DATA.image_url,
+            datasheet_url=_FRESH_DATA.datasheet_url,
+            price_breaks=_FRESH_DATA.price_breaks,
+            parameters=_FRESH_DATA.parameters,
+            extra_data={"stock": 250},
+        )
+
+        with (
+            patch(_SVC_PART) as MockPart,
+            patch(_SVC_SP) as MockSP,
+            patch(_SVC_PB) as MockPB,
+            patch(_SVC_CT) as MockContentType,
+            patch(_SVC_TMPL) as MockTmpl,
+            patch(_SVC_PARAM) as MockParam,
+            patch(_SVC_DL),
+            patch(_SVC_ATTACH) as MockAttach,
+            patch.object(plugin, "get_import_data", return_value=stock_data),
+        ):
+            MockPart.DoesNotExist = Exception
+            MockPart.objects.get.return_value = _make_part()
+            MockContentType.objects.get_for_model.return_value = "part-content-type"
+            _svc_stub_qs_for_sp(MockSP, sp)
+            _svc_stub_pb_qs(MockPB, [])
+            MockTmpl.objects.get_or_create.return_value = (MagicMock(), True)
+            MockParam.objects.filter.return_value.exists.return_value = False
+            _stub_attachment(MockAttach, has_datasheet=False)
+
+            result = enrich_part_for_provider(plugin, "test-provider", 42, dry_run=False)
+
+        assert "supplier_part:available" in result["updated"]
+        sp.update_available_quantity.assert_called_once_with(250)
+
+
+# ---------------------------------------------------------------------------
+# supplier_part_defaults unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestSupplierPartDefaults:
+    def test_includes_link(self) -> None:
+        from inventree_import_plugin.base import supplier_part_defaults
+
+        data = PartData(sku="C1", name="X", description="", link="https://lcsc.com/C1")
+        defaults = supplier_part_defaults(data)
+        assert defaults["link"] == "https://lcsc.com/C1"
+
+    def test_includes_description_when_present(self) -> None:
+        from inventree_import_plugin.base import supplier_part_defaults
+
+        data = PartData(sku="C1", name="X", description="Op-amp")
+        defaults = supplier_part_defaults(data)
+        assert defaults["description"] == "Op-amp"
+
+    def test_omits_description_when_empty(self) -> None:
+        from inventree_import_plugin.base import supplier_part_defaults
+
+        data = PartData(sku="C1", name="X", description="")
+        defaults = supplier_part_defaults(data)
+        assert "description" not in defaults
+
+    def test_includes_available_when_stock_positive(self) -> None:
+        from inventree_import_plugin.base import supplier_part_defaults
+
+        data = PartData(sku="C1", name="X", description="", extra_data={"stock": 500})
+        defaults = supplier_part_defaults(data)
+        assert defaults["available"] == 500
+        # availability_updated is handled by the model's save(), not set in defaults
+
+    def test_omits_available_when_stock_zero(self) -> None:
+        from inventree_import_plugin.base import supplier_part_defaults
+
+        data = PartData(sku="C1", name="X", description="", extra_data={"stock": 0})
+        defaults = supplier_part_defaults(data)
+        assert "available" not in defaults
+        assert "availability_updated" not in defaults
+
+    def test_omits_available_when_no_stock_key(self) -> None:
+        from inventree_import_plugin.base import supplier_part_defaults
+
+        data = PartData(sku="C1", name="X", description="")
+        defaults = supplier_part_defaults(data)
+        assert "available" not in defaults
+
+    def test_omits_available_when_stock_not_int(self) -> None:
+        from inventree_import_plugin.base import supplier_part_defaults
+
+        data = PartData(sku="C1", name="X", description="", extra_data={"stock": "many"})
+        defaults = supplier_part_defaults(data)
+        assert "available" not in defaults

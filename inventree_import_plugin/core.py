@@ -4,7 +4,11 @@ from typing import Any
 
 from inventree_import_plugin import PLUGIN_VERSION
 from inventree_import_plugin.api import build_urlpatterns
-from inventree_import_plugin.base import BaseImportPlugin
+from inventree_import_plugin.base import (
+    BaseImportPlugin,
+    supplier_part_defaults,
+    supplier_part_update_values,
+)
 from inventree_import_plugin.compat import SearchResult, Supplier
 from inventree_import_plugin.models import PartData
 from inventree_import_plugin.providers import get_provider_adapter, get_provider_adapters
@@ -137,12 +141,31 @@ class InvenTreeImportPlugin(BaseImportPlugin):
         provider_slug = str(data.extra_data.get("provider_slug") or "")
         supplier_company = self.get_supplier_company_for(provider_slug)
 
-        supplier_part, _ = SupplierPart.objects.get_or_create(
+        defaults = supplier_part_defaults(data)
+        defaults["manufacturer_part"] = manufacturer_part
+
+        supplier_part, created = SupplierPart.objects.get_or_create(
             part=part,
             supplier=supplier_company,
             SKU=data.sku,
-            defaults={"manufacturer_part": manufacturer_part, "link": data.link},
+            defaults=defaults,
         )
+
+        if not created:
+            regular_updates, available_quantity = supplier_part_update_values(supplier_part, data)
+
+            if regular_updates:
+                for field, value in regular_updates.items():
+                    setattr(supplier_part, field, value)
+                supplier_part.save(update_fields=list(regular_updates.keys()))
+
+            if available_quantity is not None:
+                if hasattr(supplier_part, "update_available_quantity"):
+                    supplier_part.update_available_quantity(available_quantity)
+                else:
+                    supplier_part.available = available_quantity
+                    supplier_part.save(update_fields=["available"])
+
         return supplier_part
 
     _PANEL_TARGET_MODELS = {"part", "partcategory"}

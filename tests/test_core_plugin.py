@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
+from inventree_import_plugin.models import PartData
+
 from inventree_import_plugin.core import InvenTreeImportPlugin
 
 
@@ -121,3 +125,36 @@ class TestBulkPayloadParsing:
             assert str(exc) == "At least one provider is required"
         else:
             raise AssertionError("Expected ValueError")
+
+
+class TestCombinedPluginSupplierPartImport:
+    def test_updates_existing_supplier_part_fields(self) -> None:
+        plugin = InvenTreeImportPlugin()
+
+        supplier_part = MagicMock()
+        supplier_part.description = "Old desc"
+        supplier_part.link = "https://old.example"
+        supplier_part.available = 10
+
+        data = PartData(
+            sku="C123",
+            name="Part",
+            description="New desc",
+            link="https://new.example",
+            extra_data={"provider_slug": "lcsc", "stock": 25},
+        )
+
+        with (
+            patch.object(plugin, "get_supplier_company_for", return_value="supplier-company"),
+            patch("company.models.SupplierPart") as MockSupplierPart,
+        ):
+            MockSupplierPart.objects.get_or_create.return_value = (supplier_part, False)
+
+            result = plugin.import_supplier_part(data, part="part", manufacturer_part="mfr")
+
+        assert result is supplier_part
+        assert supplier_part.description == "New desc"
+        assert supplier_part.link == "https://new.example"
+        supplier_part.save.assert_called_once()
+        assert set(supplier_part.save.call_args.kwargs["update_fields"]) == {"description", "link"}
+        supplier_part.update_available_quantity.assert_called_once_with(25)

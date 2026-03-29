@@ -7,6 +7,8 @@ from inventree_import_plugin.base import (
     _download_and_set_image,
     _get_parameter_model_dependencies,
     _parameter_filter_kwargs,
+    supplier_part_defaults,
+    supplier_part_update_values,
 )
 from inventree_import_plugin.providers import get_provider_adapters
 
@@ -106,6 +108,7 @@ def _build_diff(
     dry_run: bool,
     part: Any,
     fresh: Any,
+    supplier_part: Any | None = None,
     existing_quantities: set[int],
     parameter_model: Any,
     parameter_template_model: Any,
@@ -114,6 +117,29 @@ def _build_diff(
     """Build structured diff data for preview responses. Returns None for apply (non-dry-run)."""
     if not dry_run:
         return None
+
+    # SupplierPart diff
+    sp_diff_rows: list[dict[str, Any]] = []
+    if supplier_part is not None:
+        regular_updates, available_quantity = supplier_part_update_values(supplier_part, fresh)
+        for field, value in supplier_part_defaults(fresh).items():
+            current = getattr(supplier_part, field, None)
+            changed = field in regular_updates or (
+                field == "available" and available_quantity is not None
+            )
+            if changed:
+                sp_diff_rows.append(
+                    {
+                        "field": field,
+                        "current": current,
+                        "incoming": value,
+                        "status": "updated" if current else "new",
+                    }
+                )
+            else:
+                sp_diff_rows.append(
+                    {"field": field, "current": current, "incoming": value, "status": "skipped"}
+                )
 
     # Image diff
     image_diff: dict[str, Any] | None = None
@@ -206,6 +232,7 @@ def _build_diff(
         "datasheet": datasheet_diff,
         "price_breaks": price_break_rows,
         "parameters": parameter_rows,
+        "supplier_part": sp_diff_rows,
     }
 
 
@@ -285,6 +312,28 @@ def enrich_part_for_provider(
     existing_quantities: set[int] = set(
         SupplierPriceBreak.objects.filter(part=supplier_part).values_list("quantity", flat=True)
     )
+
+    # SupplierPart supplier-owned fields — update when values change
+    regular_updates, available_quantity = supplier_part_update_values(supplier_part, fresh)
+
+    for field in regular_updates:
+        updated.append(f"supplier_part:{field}")
+
+    if available_quantity is not None:
+        updated.append("supplier_part:available")
+
+    if not dry_run:
+        if regular_updates:
+            for field, value in regular_updates.items():
+                setattr(supplier_part, field, value)
+            supplier_part.save(update_fields=list(regular_updates.keys()))
+
+        if available_quantity is not None:
+            if hasattr(supplier_part, "update_available_quantity"):
+                supplier_part.update_available_quantity(available_quantity)
+            else:
+                supplier_part.available = available_quantity
+                supplier_part.save(update_fields=["available"])
 
     if fresh.image_url and not part.image:
         if dry_run:
@@ -367,6 +416,7 @@ def enrich_part_for_provider(
         dry_run=dry_run,
         part=part,
         fresh=fresh,
+        supplier_part=supplier_part,
         existing_quantities=existing_quantities,
         parameter_model=parameter_model,
         parameter_template_model=parameter_template_model,
