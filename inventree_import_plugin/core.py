@@ -169,12 +169,16 @@ class InvenTreeImportPlugin(BaseImportPlugin):
     def get_ui_navigation_items(
         self, request: Any, context: dict[str, Any] | None = None, **kwargs: Any
     ) -> list[dict[str, Any]]:
+        bulk_url = f"/plugin/{self.SLUG}/bulk/"
+        if request is not None and hasattr(request, "build_absolute_uri"):
+            bulk_url = str(request.build_absolute_uri(bulk_url))
+
         return [
             {
                 "key": "supplier-bulk-enrich",
                 "title": "Bulk Enrich",
                 "icon": "ti:list-check",
-                "options": {"url": f"/plugin/{self.SLUG}/bulk/"},
+                "options": {"url": bulk_url},
             }
         ]
 
