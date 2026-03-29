@@ -145,26 +145,39 @@ class InvenTreeImportPlugin(BaseImportPlugin):
         )
         return supplier_part
 
+    _PANEL_TARGET_MODELS = {"part", "partcategory"}
+
     def get_ui_panels(
         self, request: Any, context: dict[str, Any] | None = None, **kwargs: Any
     ) -> list[dict[str, Any]]:
         target_context = context or {}
-        if target_context.get("target_model") != "part":
+        target_model = target_context.get("target_model")
+
+        if target_model not in self._PANEL_TARGET_MODELS:
             return []
+
+        if target_model == "partcategory":
+            title = "Enrich Category Parts"
+            description = "Preview and apply supplier updates to parts in this category"
+        else:
+            title = "Enrich Part"
+            description = "Preview and apply updates from configured suppliers"
 
         return [
             {
                 "key": "supplier-enrich",
-                "title": "Enrich Part",
-                "description": "Preview and apply updates from configured suppliers",
+                "title": title,
+                "description": description,
                 "icon": "ti:refresh-dot:outline",
                 "source": self.plugin_static_file("Panel.js:renderEnrichPanel"),
-                "context": {
-                    "plugin_slug": self.SLUG,
-                    "bulk_url": f"/plugin/{self.SLUG}/bulk-v2/",
-                },
+                "context": {"plugin_slug": self.SLUG},
             }
         ]
+
+    def get_ui_navigation_items(
+        self, request: Any, context: dict[str, Any] | None = None, **kwargs: Any
+    ) -> list[dict[str, Any]]:
+        return []
 
     def _get_provider_adapter(self, provider_slug: str) -> ProviderAdapter:
         return get_provider_adapter(provider_slug)
