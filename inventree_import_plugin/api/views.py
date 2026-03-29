@@ -92,4 +92,5 @@ def build_urlpatterns(plugin: Any) -> list[Any]:
         path("api/bulk/preview/", _BulkPreviewView.as_view(), name="bulk-preview"),
         path("api/bulk/apply/", _BulkApplyView.as_view(), name="bulk-apply"),
         path("bulk/", _BulkPageView.as_view(), name="bulk-page"),
+        path("bulk-v2/", _BulkPageView.as_view(), name="bulk-page-v2"),
     ]

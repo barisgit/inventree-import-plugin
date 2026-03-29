@@ -161,7 +161,7 @@ class InvenTreeImportPlugin(BaseImportPlugin):
                 "source": self.plugin_static_file("Panel.js:renderEnrichPanel"),
                 "context": {
                     "plugin_slug": self.SLUG,
-                    "bulk_url": f"/plugin/{self.SLUG}/bulk/",
+                    "bulk_url": f"/plugin/{self.SLUG}/bulk-v2/",
                 },
             }
         ]
