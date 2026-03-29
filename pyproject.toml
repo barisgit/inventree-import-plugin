@@ -23,7 +23,7 @@ where = ["."]
 include = ["inventree_import_plugin*"]
 
 [tool.setuptools.package-data]
-inventree_import_plugin = ["static/**/*", "templates/**/*.html"]
+inventree_import_plugin = ["static/**/*", "static/.vite/*", "templates/**/*.html"]
 
 [tool.ruff]
 line-length = 100
