@@ -470,6 +470,11 @@ def enrich_part_for_provider(
                     updated.append(key)
                     continue
             else:
+                if not _key_allowed(key, selected_keys):
+                    skipped.append(key)
+                    if content_type_model is not None:
+                        skipped.append(f"supplier_parameter:{param.name}")
+                    continue
                 template, _ = parameter_template_model.objects.get_or_create(
                     name=param.name,
                     defaults={"units": param.units},
@@ -481,11 +486,9 @@ def enrich_part_for_provider(
             else:
                 if dry_run:
                     updated.append(key)
-                elif _key_allowed(key, selected_keys):
+                else:
                     parameter_model.objects.create(**parameter_kwargs, data=param.value)
                     updated.append(key)
-                else:
-                    skipped.append(key)
 
             # Mirror onto SupplierPart when using generic parameter model
             if content_type_model is not None:
@@ -638,7 +641,9 @@ def parse_bulk_operations(plugin: Any, request: Any) -> list[dict[str, Any]]:
         if raw_keys is not None:
             if not isinstance(raw_keys, list):
                 raise ValueError("selected_keys must be a list of strings")
-            selected_keys: set[str] | None = {k for k in raw_keys if isinstance(k, str)}
+            if not all(isinstance(k, str) for k in raw_keys):
+                raise ValueError("selected_keys must be a list of strings")
+            selected_keys: set[str] | None = set(raw_keys)
         else:
             selected_keys = None
 

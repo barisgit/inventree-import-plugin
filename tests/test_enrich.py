@@ -1504,6 +1504,48 @@ class TestSelectedKeysApply:
         sp_updated = [k for k in result["updated"] if k.startswith("supplier_part:")]
         assert sp_updated == ["supplier_part:link"]
 
+    def test_unselected_parameter_no_db_writes(self) -> None:
+        """ParameterTemplate.get_or_create and Parameter lookups must NOT be called
+        for parameter keys that are not in selected_keys during apply."""
+        from inventree_import_plugin.services.enrich import enrich_part_for_provider
+
+        plugin = _MockCorePlugin()
+        _part = _make_part()
+        _sp = _make_supplier_part()
+
+        with (
+            patch(_SVC_PART) as MockPart,
+            patch(_SVC_SP) as MockSP,
+            patch(_SVC_PB) as MockPB,
+            patch(_SVC_CT) as MockContentType,
+            patch(_SVC_TMPL) as MockTmpl,
+            patch(_SVC_PARAM) as MockParam,
+            patch(_SVC_DL),
+            patch(_SVC_ATTACH) as MockAttach,
+            patch.object(plugin, "get_import_data", return_value=_FRESH_DATA),
+        ):
+            MockPart.DoesNotExist = Exception
+            MockPart.objects.get.return_value = _part
+            MockContentType.objects.get_for_model.return_value = "part-content-type"
+            _svc_stub_qs_for_sp(MockSP, _sp)
+            _svc_stub_pb_qs(MockPB, [])
+            _stub_attachment(MockAttach, has_datasheet=False)
+
+            result = enrich_part_for_provider(
+                plugin,
+                "test-provider",
+                42,
+                dry_run=False,
+                selected_keys={"image"},
+            )
+
+        # No ParameterTemplate or Parameter DB work for unselected parameter
+        MockTmpl.objects.get_or_create.assert_not_called()
+        MockParam.objects.filter.assert_not_called()
+        MockParam.objects.create.assert_not_called()
+        assert "parameter:Voltage" in result["skipped"]
+        assert "supplier_parameter:Voltage" in result["skipped"]
+
 
 # ---------------------------------------------------------------------------
 # parse_bulk_operations
@@ -1644,6 +1686,42 @@ class TestParseBulkOperations:
             result = parse_bulk_operations(plugin, request)
 
         assert result[0]["selected_keys"] is None
+
+    def test_selected_keys_rejects_non_string_items(self) -> None:
+        """selected_keys containing non-string items must raise ValueError."""
+        from inventree_import_plugin.services.enrich import parse_bulk_operations
+
+        plugin = self._make_plugin()
+        request = self._make_request(
+            [
+                {
+                    "part_id": 1,
+                    "provider_slug": "test-provider",
+                    "selected_keys": ["image", 123],
+                },
+            ]
+        )
+        with patch(_SVC_GPA, return_value=(_make_adapter("test-provider"),)):
+            with pytest.raises(ValueError, match="selected_keys must be a list of strings"):
+                parse_bulk_operations(plugin, request)
+
+    def test_selected_keys_rejects_non_list_type(self) -> None:
+        """selected_keys as a non-list type must raise ValueError."""
+        from inventree_import_plugin.services.enrich import parse_bulk_operations
+
+        plugin = self._make_plugin()
+        request = self._make_request(
+            [
+                {
+                    "part_id": 1,
+                    "provider_slug": "test-provider",
+                    "selected_keys": "image",
+                },
+            ]
+        )
+        with patch(_SVC_GPA, return_value=(_make_adapter("test-provider"),)):
+            with pytest.raises(ValueError, match="selected_keys must be a list of strings"):
+                parse_bulk_operations(plugin, request)
 
 
 # ---------------------------------------------------------------------------
