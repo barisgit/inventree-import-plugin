@@ -204,11 +204,22 @@ const PART_FIELD_LABELS: Record<string, string> = {
   link: 'Part link',
 };
 
+const MANUFACTURER_PART_FIELD_LABELS: Record<string, string> = {
+  manufacturer_name: 'Manufacturer',
+  manufacturer_part_number: 'MPN',
+};
+
 /** Resolve the authoritative status for a key from the EnrichResult lists. */
 function authoritativeStatus(key: string, result: EnrichResult): ItemStatus {
   if (result.skipped.includes(key)) return 'skip';
   if (result.updated.includes(key)) return 'update';
   return 'skip';
+}
+
+/** Map a backend diff-row status to the frontend ItemStatus. */
+function diffRowStatusToItemStatus(status: 'new' | 'skipped' | 'updated'): ItemStatus {
+  if (status === 'skipped') return 'skip';
+  return 'update';
 }
 
 function classifyKey(raw: string): { section: keyof ParsedSections; label: string } {
@@ -374,8 +385,8 @@ function buildManufacturerPartItems(result: EnrichResult): RichSupplierPartItem[
   }
   return diff.manufacturer_part.map((row) => ({
     key: `manufacturer_part:${row.field}`,
-    label: row.field === 'manufacturer_name' ? 'Manufacturer' : 'MPN',
-    status: authoritativeStatus(`manufacturer_part:${row.field}`, result),
+    label: MANUFACTURER_PART_FIELD_LABELS[row.field] ?? row.field,
+    status: diffRowStatusToItemStatus(row.status),
     currentValue: row.current != null ? String(row.current) : null,
     incomingValue: row.incoming != null ? String(row.incoming) : null,
   }));
