@@ -1240,7 +1240,10 @@ class TestParameterNormalization:
             templates=[template],
         )
         plugin = _ServicePlugin(
-            _make_fresh(parameters=[PartParameter(name="voltage", value="5V", units="V")])
+            _make_fresh(
+                parameters=[PartParameter(name="voltage", value="5V", units="V")],
+                extra_data={},
+            )
         )
         enrich_module.enrich_part_for_provider(
             plugin,
@@ -1446,7 +1449,8 @@ class TestCompanyNormalizationRawStoredRegression:
             monkeypatch,
             runtime,
             fresh=_make_fresh(
-                parameters=[PartParameter(name="forward voltage (V)", value="5V", units="V")]
+                parameters=[PartParameter(name="forward voltage (V)", value="5V", units="V")],
+                extra_data={},
             ),
             templates=[template],
         )
@@ -1462,10 +1466,153 @@ class TestCompanyNormalizationRawStoredRegression:
             monkeypatch,
             runtime,
             fresh=_make_fresh(
-                parameters=[PartParameter(name="forward voltage (V)", value="5V", units="V")]
+                parameters=[PartParameter(name="forward voltage (V)", value="5V", units="V")],
+                extra_data={},
             ),
             templates=[template],
         )
 
         assert "parameter:forward voltage (V)" in result["updated"]
         assert len(harness.template_manager.templates) == 1
+
+
+class TestSupplierStockParameter:
+    """Supplier Stock is stored only on SupplierPart parameters when stock exists."""
+
+    def test_service_creates_supplier_stock_parameter(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        result, harness = _run_service(monkeypatch, runtime)
+
+        assert "parameter:Supplier Stock" not in result["updated"]
+        assert "supplier_parameter:Supplier Stock" in result["updated"]
+        stock_records = [
+            r
+            for r in harness.parameter_manager.records
+            if normalize_name(r.template.name) == normalize_name("Supplier Stock")
+            and r.model_id == harness.supplier_part.pk
+        ]
+        assert len(stock_records) == 1
+        assert stock_records[0].data == "100"
+
+    def test_base_creates_supplier_stock_parameter(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        result, harness = _run_base(monkeypatch, runtime)
+
+        assert "parameter:Supplier Stock" not in result["updated"]
+        assert "supplier_parameter:Supplier Stock" in result["updated"]
+        stock_records = [
+            r
+            for r in harness.parameter_manager.records
+            if normalize_name(r.template.name) == normalize_name("Supplier Stock")
+            and r.model_id == harness.supplier_part.pk
+        ]
+        assert len(stock_records) == 1
+        assert stock_records[0].data == "100"
+
+    def test_not_created_when_no_stock(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        result, _ = _run_service(
+            monkeypatch,
+            runtime,
+            fresh=_make_fresh(extra_data={}),
+        )
+
+        assert "supplier_parameter:Supplier Stock" not in result["updated"]
+        assert "supplier_parameter:Supplier Stock" not in result["skipped"]
+
+    def test_not_created_when_stock_is_zero(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        result, _ = _run_service(
+            monkeypatch,
+            runtime,
+            fresh=_make_fresh(extra_data={"stock": 0}),
+        )
+
+        assert "supplier_parameter:Supplier Stock" not in result["updated"]
+        assert "supplier_parameter:Supplier Stock" not in result["skipped"]
+
+    def test_updates_existing_supplier_stock(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        template = _Template("Supplier Stock", "")
+        supplier_part = _make_supplier_part()
+        existing = _ParamRecord(template=template, model_id=supplier_part.pk, value="50")
+        result, harness = _run_service(
+            monkeypatch,
+            runtime,
+            supplier_part=supplier_part,
+            templates=[template],
+            parameters=[existing],
+        )
+
+        assert "supplier_parameter:Supplier Stock" in result["updated"]
+        assert existing.data == "100"
+
+    def test_skipped_when_supplier_stock_unchanged(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        template = _Template("Supplier Stock", "")
+        supplier_part = _make_supplier_part()
+        existing = _ParamRecord(template=template, model_id=supplier_part.pk, value="100")
+        result, _ = _run_service(
+            monkeypatch,
+            runtime,
+            supplier_part=supplier_part,
+            templates=[template],
+            parameters=[existing],
+        )
+
+        assert "supplier_parameter:Supplier Stock" in result["skipped"]
+
+    def test_preview_diff_includes_supplier_stock(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        result, _ = _run_service(monkeypatch, runtime, dry_run=True)
+
+        diff = result["diff"]
+        stock_rows = [
+            r
+            for r in diff["supplier_parameters"]
+            if normalize_name(r["name"]) == normalize_name("Supplier Stock")
+        ]
+        assert len(stock_rows) == 1
+        assert stock_rows[0]["status"] == "new"
+        assert stock_rows[0]["incoming"] == "100"
+
+    def test_no_duplicate_when_provider_already_includes_stock_parameter(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        fresh = _make_fresh(
+            parameters=[
+                PartParameter(name="Voltage", value="5V", units="V"),
+                PartParameter(name="Supplier Stock", value="100", units=""),
+            ],
+        )
+        result, _ = _run_service(monkeypatch, runtime, fresh=fresh)
+
+        # Should have exactly one Supplier Stock supplier_parameter entry.
+        stock_updated = [
+            k
+            for k in result["updated"]
+            if k.startswith("supplier_parameter:") and "Supplier Stock" in k
+        ]
+        assert len(stock_updated) == 1
+
+    def test_supplier_stock_mirrors_to_supplier_part_parameter(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        result, harness = _run_service(monkeypatch, runtime)
+
+        assert "supplier_parameter:Supplier Stock" in result["updated"]
+        sp_stock = [
+            r
+            for r in harness.parameter_manager.records
+            if normalize_name(r.template.name) == normalize_name("Supplier Stock")
+            and r.model_id == harness.supplier_part.pk
+        ]
+        assert len(sp_stock) == 1
+        assert sp_stock[0].data == "100"

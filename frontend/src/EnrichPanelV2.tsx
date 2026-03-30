@@ -85,6 +85,7 @@ type DiffPayload = {
   datasheet: DiffFieldEntry | null;
   price_breaks: DiffPriceBreakRow[];
   parameters: DiffParameterRow[];
+  supplier_parameters: DiffParameterRow[];
   part_fields: DiffFieldEntry[];
   supplier_part: DiffSupplierPartRow[];
   manufacturer_part: DiffManufacturerPartRow[];
@@ -314,14 +315,24 @@ function buildParameterItems(result: EnrichResult): RichParameterItem[] {
     const sections = parseResultKeys(result);
     return sections.parameters.map((item) => ({ ...item, currentValue: null, incomingValue: null }));
   }
-  return diff.parameters.map((row) => ({
-    key: `parameter:${row.name}`,
-    label: row.name,
-    status: authoritativeStatus(`parameter:${row.name}`, result),
-    currentValue: row.current,
-    incomingValue: row.incoming,
-    units: row.units,
-  }));
+  return [
+    ...diff.parameters.map((row) => ({
+      key: `parameter:${row.name}`,
+      label: row.name,
+      status: authoritativeStatus(`parameter:${row.name}`, result),
+      currentValue: row.current,
+      incomingValue: row.incoming,
+      units: row.units,
+    })),
+    ...diff.supplier_parameters.map((row) => ({
+      key: `supplier_parameter:${row.name}`,
+      label: `Supplier: ${row.name}`,
+      status: authoritativeStatus(`supplier_parameter:${row.name}`, result),
+      currentValue: row.current,
+      incomingValue: row.incoming,
+      units: row.units,
+    })),
+  ];
 }
 
 function buildPartFieldItems(result: EnrichResult): RichPartFieldItem[] {

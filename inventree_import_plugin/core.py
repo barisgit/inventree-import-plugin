@@ -16,7 +16,7 @@ from inventree_import_plugin.providers.base import ProviderAdapter
 from inventree_import_plugin.services import parse_bulk_payload
 
 # Bump this version when deploying an updated enrich panel bundle.
-ENRICH_PANEL_ASSET = "enrich-panel-v10.js"
+ENRICH_PANEL_ASSET = "enrich-panel-v11.js"
 
 
 class InvenTreeImportPlugin(BaseImportPlugin):
