@@ -48,15 +48,16 @@ class TestCombinedPluginSuppliers:
 class TestCombinedPluginUi:
     def test_part_panel_uses_enrich_panel_asset(self) -> None:
         plugin = InvenTreeImportPlugin()
-        plugin.plugin_static_file = lambda path: f"static/{path}"
 
         panels = plugin.get_ui_panels(None, {"target_model": "part"})
 
-        assert panels[0]["source"] == "static/EnrichPanelV2.js:renderEnrichPanel"
+        assert (
+            panels[0]["source"]
+            == f"/static/plugins/{plugin.SLUG}/EnrichPanelV2.js:renderEnrichPanel"
+        )
 
     def test_partcategory_panel_context(self) -> None:
         plugin = InvenTreeImportPlugin()
-        plugin.plugin_static_file = lambda path: f"static/{path}"
 
         panels = plugin.get_ui_panels(None, {"target_model": "partcategory"})
 
@@ -67,7 +68,6 @@ class TestCombinedPluginUi:
 
     def test_panel_returns_empty_for_unsupported_model(self) -> None:
         plugin = InvenTreeImportPlugin()
-        plugin.plugin_static_file = lambda path: f"static/{path}"
 
         panels = plugin.get_ui_panels(None, {"target_model": "company"})
 
