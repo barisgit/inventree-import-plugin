@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from io import BytesIO
 from typing import Any
 
@@ -12,11 +13,41 @@ __all__ = [
     "BaseImportPlugin",
     "SearchResult",
     "Supplier",
+    "normalize_name",
     "supplier_part_defaults",
     "supplier_part_update_values",
 ]
 
 logger = logging.getLogger("inventree_import_plugin")
+
+
+def normalize_name(name: str) -> str:
+    """Conservative canonicalization for company/template lookup deduplication.
+
+    Case-folds and removes whitespace / punctuation so simple variants like
+    ``Texas Instruments``, ``texasinstruments`` and ``Texas-Instruments`` map
+    to the same lookup key. This is still deterministic normalization, not
+    fuzzy matching.
+    """
+    return re.sub(r"[\W_]+", "", name.casefold(), flags=re.UNICODE)
+
+
+def _save_param_with_user(instance: Any, user: Any, update_fields: list[str]) -> None:
+    """Save a parameter instance, setting ``updated_by`` when supported."""
+    if user is not None and hasattr(instance, "updated_by"):
+        instance.updated_by = user
+        if "updated_by" not in update_fields:
+            update_fields = [*update_fields, "updated_by"]
+    instance.save(update_fields=update_fields)
+
+
+def _create_param_with_user(model: Any, user: Any, **kwargs: Any) -> Any:
+    """Create a parameter instance, setting ``updated_by`` when supported."""
+    instance = model.objects.create(**kwargs)
+    if user is not None and hasattr(instance, "updated_by"):
+        instance.updated_by = user
+        instance.save(update_fields=["updated_by"])
+    return instance
 
 
 def supplier_part_defaults(data: PartData) -> dict[str, Any]:
@@ -224,8 +255,8 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
         from company.models import Company, ManufacturerPart
 
         manufacturer, _ = Company.objects.get_or_create(
-            name__iexact=data.manufacturer_name,
-            defaults={"name": data.manufacturer_name, "is_manufacturer": True},
+            name__iexact=normalize_name(data.manufacturer_name),
+            defaults={"name": data.manufacturer_name.strip(), "is_manufacturer": True},
         )
         mfr_part, _ = ManufacturerPart.objects.get_or_create(
             part=part,
@@ -274,7 +305,9 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
     # Enrich endpoint (shared by all supplier plugins)
     # ------------------------------------------------------------------
 
-    def _enrich_part(self, part_id: int, *, dry_run: bool = False) -> dict[str, Any]:
+    def _enrich_part(
+        self, part_id: int, *, dry_run: bool = False, user: Any = None
+    ) -> dict[str, Any]:
         """Fetch fresh supplier data and update enriched fields.
 
         SupplierPart fields (description, link, available): update-on-change.
@@ -489,14 +522,16 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
         for param in fresh.parameters:
             try:
                 if dry_run:
-                    template = parameter_template_model.objects.filter(name=param.name).first()
+                    template = parameter_template_model.objects.filter(
+                        name__iexact=normalize_name(param.name)
+                    ).first()
                     if template is None:
                         updated.append(f"parameter:{param.name}")
                         continue
                 else:
                     template, _ = parameter_template_model.objects.get_or_create(
-                        name=param.name,
-                        defaults={"units": param.units},
+                        name__iexact=normalize_name(param.name),
+                        defaults={"name": param.name.strip(), "units": param.units},
                     )
 
                 parameter_kwargs = _parameter_filter_kwargs(part, template, content_type_model)
@@ -505,7 +540,9 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
                     if dry_run:
                         updated.append(f"parameter:{param.name}")
                     else:
-                        parameter_model.objects.create(**parameter_kwargs, data=param.value)
+                        _create_param_with_user(
+                            parameter_model, user, **parameter_kwargs, data=param.value
+                        )
                         updated.append(f"parameter:{param.name}")
                 else:
                     current_value = getattr(existing_param, "data", None) or getattr(
@@ -516,7 +553,7 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
                             updated.append(f"parameter:{param.name}")
                         else:
                             existing_param.data = param.value
-                            existing_param.save(update_fields=["data"])
+                            _save_param_with_user(existing_param, user, ["data"])
                             updated.append(f"parameter:{param.name}")
                     else:
                         skipped.append(f"parameter:{param.name}")
@@ -531,7 +568,9 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
                         if dry_run:
                             updated.append(f"supplier_parameter:{param.name}")
                         else:
-                            parameter_model.objects.create(**sp_kwargs, data=param.value)
+                            _create_param_with_user(
+                                parameter_model, user, **sp_kwargs, data=param.value
+                            )
                             updated.append(f"supplier_parameter:{param.name}")
                     else:
                         current_sp_value = getattr(existing_sp_param, "data", None) or getattr(
@@ -542,7 +581,7 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
                                 updated.append(f"supplier_parameter:{param.name}")
                             else:
                                 existing_sp_param.data = param.value
-                                existing_sp_param.save(update_fields=["data"])
+                                _save_param_with_user(existing_sp_param, user, ["data"])
                                 updated.append(f"supplier_parameter:{param.name}")
                         else:
                             skipped.append(f"supplier_parameter:{param.name}")
@@ -570,7 +609,7 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
                 return Response(result)
 
             def post(inner_self, request: Any, part_id: int) -> Any:  # noqa: N805
-                result = plugin._enrich_part(part_id)
+                result = plugin._enrich_part(part_id, user=getattr(request, "user", None))
                 return Response(result)
 
         return [path("enrich/<int:part_id>/", _EnrichView.as_view(), name="enrich")]

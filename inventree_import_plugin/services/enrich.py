@@ -5,9 +5,12 @@ from contextlib import nullcontext
 from typing import Any, cast
 
 from inventree_import_plugin.base import (
+    _create_param_with_user,
     _download_and_set_image,
     _get_parameter_model_dependencies,
     _parameter_filter_kwargs,
+    _save_param_with_user,
+    normalize_name,
     supplier_part_defaults,
     supplier_part_update_values,
 )
@@ -318,7 +321,9 @@ def _build_diff(
     # Parameter rows — update-on-change
     parameter_rows: list[dict[str, Any]] = []
     for param in fresh.parameters:
-        template = parameter_template_model.objects.filter(name=param.name).first()
+        template = parameter_template_model.objects.filter(
+            name__iexact=normalize_name(param.name)
+        ).first()
         current_value = None
         exists = False
         if template is not None:
@@ -389,6 +394,7 @@ def enrich_part_for_provider(
     *,
     dry_run: bool = False,
     selected_keys: set[str] | None = None,
+    user: Any = None,
 ) -> dict[str, Any]:
     """Enrich a single part from provider data.
 
@@ -541,9 +547,9 @@ def enrich_part_for_provider(
                     from company.models import Company, ManufacturerPart
 
                     manufacturer, _ = Company.objects.get_or_create(
-                        name__iexact=fresh.manufacturer_name,
+                        name__iexact=normalize_name(fresh.manufacturer_name),
                         defaults={
-                            "name": fresh.manufacturer_name,
+                            "name": fresh.manufacturer_name.strip(),
                             "is_manufacturer": True,
                         },
                     )
@@ -686,7 +692,9 @@ def enrich_part_for_provider(
             key = f"parameter:{param.name}"
             try:
                 if dry_run:
-                    template = parameter_template_model.objects.filter(name=param.name).first()
+                    template = parameter_template_model.objects.filter(
+                        name__iexact=normalize_name(param.name)
+                    ).first()
                     if template is None:
                         updated.append(key)
                         continue
@@ -701,8 +709,8 @@ def enrich_part_for_provider(
                             skipped.append(f"supplier_parameter:{param.name}")
                         continue
                     template, _ = parameter_template_model.objects.get_or_create(
-                        name=param.name,
-                        defaults={"units": param.units},
+                        name__iexact=normalize_name(param.name),
+                        defaults={"name": param.name.strip(), "units": param.units},
                     )
 
                 parameter_kwargs = _parameter_filter_kwargs(part, template, content_type_model)
@@ -716,7 +724,7 @@ def enrich_part_for_provider(
                             updated.append(key)
                         else:
                             existing_param.data = param.value
-                            existing_param.save(update_fields=["data"])
+                            _save_param_with_user(existing_param, user, ["data"])
                             updated.append(key)
                     else:
                         skipped.append(key)
@@ -724,7 +732,9 @@ def enrich_part_for_provider(
                     if dry_run:
                         updated.append(key)
                     else:
-                        parameter_model.objects.create(**parameter_kwargs, data=param.value)
+                        _create_param_with_user(
+                            parameter_model, user, **parameter_kwargs, data=param.value
+                        )
                         updated.append(key)
 
                 # Mirror onto SupplierPart when using generic parameter model
@@ -743,7 +753,7 @@ def enrich_part_for_provider(
                                 updated.append(sp_key)
                             elif _key_allowed(sp_key, selected_keys):
                                 existing_sp_param.data = param.value
-                                existing_sp_param.save(update_fields=["data"])
+                                _save_param_with_user(existing_sp_param, user, ["data"])
                                 updated.append(sp_key)
                             else:
                                 skipped.append(sp_key)
@@ -753,7 +763,9 @@ def enrich_part_for_provider(
                         if dry_run:
                             updated.append(sp_key)
                         elif _key_allowed(sp_key, selected_keys):
-                            parameter_model.objects.create(**sp_kwargs, data=param.value)
+                            _create_param_with_user(
+                                parameter_model, user, **sp_kwargs, data=param.value
+                            )
                             updated.append(sp_key)
                         else:
                             skipped.append(sp_key)
@@ -787,6 +799,7 @@ def bulk_enrich(
     *,
     dry_run: bool,
     operations: list[dict[str, Any]] | None = None,
+    user: Any = None,
 ) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
 
@@ -799,6 +812,7 @@ def bulk_enrich(
                     op["part_id"],
                     dry_run=dry_run,
                     selected_keys=op.get("selected_keys"),
+                    user=user,
                 )
             )
         requested_parts = len({op["part_id"] for op in operations})
@@ -807,7 +821,9 @@ def bulk_enrich(
         for part_id in part_ids or []:
             for provider_slug in provider_slugs or []:
                 results.append(
-                    enrich_part_for_provider(plugin, provider_slug, part_id, dry_run=dry_run)
+                    enrich_part_for_provider(
+                        plugin, provider_slug, part_id, dry_run=dry_run, user=user
+                    )
                 )
         requested_parts = len(part_ids or [])
         provider_count = len(provider_slugs or [])

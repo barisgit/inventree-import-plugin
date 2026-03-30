@@ -31,7 +31,15 @@ def build_urlpatterns(plugin: Any) -> list[Any]:
 
     class _PreviewView(_BaseRoleView):
         def get(inner_self, request: Any, part_id: int, provider_slug: str) -> Any:  # noqa: N805
-            return Response(enrich_part_for_provider(plugin, provider_slug, part_id, dry_run=True))
+            return Response(
+                enrich_part_for_provider(
+                    plugin,
+                    provider_slug,
+                    part_id,
+                    dry_run=True,
+                    user=getattr(request, "user", None),
+                )
+            )
 
     class _ApplyView(_BaseRoleView):
         def post(inner_self, request: Any, part_id: int, provider_slug: str) -> Any:  # noqa: N805
@@ -40,7 +48,12 @@ def build_urlpatterns(plugin: Any) -> list[Any]:
                 selected_keys = set(selected_keys)
             return Response(
                 enrich_part_for_provider(
-                    plugin, provider_slug, part_id, dry_run=False, selected_keys=selected_keys
+                    plugin,
+                    provider_slug,
+                    part_id,
+                    dry_run=False,
+                    selected_keys=selected_keys,
+                    user=getattr(request, "user", None),
                 )
             )
 
@@ -50,16 +63,39 @@ def build_urlpatterns(plugin: Any) -> list[Any]:
                 part_ids, provider_slugs = parse_bulk_payload(plugin, request)
             except ValueError as exc:
                 return Response({"detail": str(exc)}, status=400)
-            return Response(bulk_enrich(plugin, part_ids, provider_slugs, dry_run=True))
+            return Response(
+                bulk_enrich(
+                    plugin,
+                    part_ids,
+                    provider_slugs,
+                    dry_run=True,
+                    user=getattr(request, "user", None),
+                )
+            )
 
     class _BulkApplyView(_BaseRoleView):
         def post(inner_self, request: Any) -> Any:  # noqa: N805
             try:
                 if "operations" in request.data:
                     operations = parse_bulk_operations(plugin, request)
-                    return Response(bulk_enrich(plugin, dry_run=False, operations=operations))
+                    return Response(
+                        bulk_enrich(
+                            plugin,
+                            dry_run=False,
+                            operations=operations,
+                            user=getattr(request, "user", None),
+                        )
+                    )
                 part_ids, provider_slugs = parse_bulk_payload(plugin, request)
-                return Response(bulk_enrich(plugin, part_ids, provider_slugs, dry_run=False))
+                return Response(
+                    bulk_enrich(
+                        plugin,
+                        part_ids,
+                        provider_slugs,
+                        dry_run=False,
+                        user=getattr(request, "user", None),
+                    )
+                )
             except ValueError as exc:
                 return Response({"detail": str(exc)}, status=400)
 

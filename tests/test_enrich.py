@@ -5,7 +5,7 @@ import types
 from contextlib import nullcontext
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Sequence
+from typing import Any, Sequence
 from unittest.mock import MagicMock
 
 import json
@@ -14,7 +14,7 @@ import pytest
 
 import inventree_import_plugin.base as base_module
 import inventree_import_plugin.services.enrich as enrich_module
-from inventree_import_plugin.base import BaseImportPlugin
+from inventree_import_plugin.base import BaseImportPlugin, normalize_name
 from inventree_import_plugin.models import PartData, PartParameter, PriceBreak
 
 
@@ -183,19 +183,33 @@ class _AttachmentManager:
 
 class _TemplateManager:
     def __init__(self, templates: list[_Template] | None = None):
-        self.templates = {template.name: template for template in templates or []}
+        self.templates: dict[str, _Template] = {}
+        for template in templates or []:
+            key = normalize_name(template.name)
+            self.templates[key] = template
 
     def filter(self, **kwargs):
-        name = kwargs.get("name")
-        template = self.templates.get(name) if isinstance(name, str) else None
+        name = kwargs.get("name") or kwargs.get("name__iexact")
+        key = normalize_name(name) if isinstance(name, str) else ""
+        template = self.templates.get(key)
         return _Query([] if template is None else [template])
 
-    def get_or_create(self, name: str, defaults: dict[str, str]):
-        template = self.templates.get(name)
+    def get_or_create(
+        self,
+        name: str | None = None,
+        *,
+        name__iexact: str | None = None,
+        defaults: dict[str, str] | None = None,
+        **_kwargs,
+    ):
+        lookup = name__iexact if name__iexact is not None else name
+        key = normalize_name(lookup) if lookup else ""
+        template = self.templates.get(key)
         if template is not None:
             return template, False
-        template = _Template(name=name, units=defaults.get("units", ""))
-        self.templates[name] = template
+        display_name = (defaults or {}).get("name", name or lookup or "")
+        template = _Template(name=display_name, units=(defaults or {}).get("units", ""))
+        self.templates[key] = template
         return template, True
 
 
@@ -242,10 +256,12 @@ class _CompanyRecord:
 
 class _CompanyManager:
     def __init__(self, companies: list[_CompanyRecord] | None = None):
-        self.companies = {c.name.lower(): c for c in companies or []}
+        self.companies: dict[str, _CompanyRecord] = {}
+        for c in companies or []:
+            self.companies[normalize_name(c.name)] = c
 
     def get_or_create(self, *, name__iexact: str = "", defaults: dict | None = None, **_kwargs):
-        key = name__iexact.lower()
+        key = normalize_name(name__iexact)
         company = self.companies.get(key)
         if company is not None:
             return company, False
@@ -469,6 +485,7 @@ def _run_base(
     attachments: list[_AttachmentRecord] | None = None,
     templates: list[_Template] | None = None,
     parameters: list[_ParamRecord] | None = None,
+    user: Any = None,
 ):
     harness = _install_backend(
         monkeypatch,
@@ -481,7 +498,7 @@ def _run_base(
         parameters=parameters,
     )
     plugin = _BasePlugin(fresh or _make_fresh())
-    result = plugin._enrich_part(harness.part.pk, dry_run=dry_run)
+    result = plugin._enrich_part(harness.part.pk, dry_run=dry_run, user=user)
     return result, harness
 
 
@@ -498,6 +515,7 @@ def _run_service(
     attachments: list[_AttachmentRecord] | None = None,
     templates: list[_Template] | None = None,
     parameters: list[_ParamRecord] | None = None,
+    user: Any = None,
 ):
     harness = _install_backend(
         monkeypatch,
@@ -516,6 +534,7 @@ def _run_service(
         harness.part.pk,
         dry_run=dry_run,
         selected_keys=selected_keys,
+        user=user,
     )
     return result, harness
 
@@ -573,7 +592,9 @@ class TestBulkEnrich:
     def test_operations_payload_is_forwarded(self, monkeypatch: pytest.MonkeyPatch):
         calls: list[tuple[int, str, set[str] | None]] = []
 
-        def _fake_enrich(_plugin, provider_slug, part_id, *, dry_run, selected_keys=None):
+        def _fake_enrich(
+            _plugin, provider_slug, part_id, *, dry_run, selected_keys=None, user=None
+        ):
             calls.append((part_id, provider_slug, selected_keys))
             return {"updated": [], "skipped": [], "errors": []}
 
@@ -1122,3 +1143,220 @@ class TestBaseManufacturerErrorReporting:
 
         assert any("manufacturer_part" in e for e in result["errors"])
         assert "manufacturer_part:link" not in result["updated"]
+
+
+class TestNormalizeName:
+    """Unit tests for the normalize_name utility."""
+
+    def test_strips_whitespace(self):
+        assert normalize_name("  TI  ") == "ti"
+
+    def test_collapses_internal_whitespace(self):
+        assert normalize_name("Texas   Instruments") == "texasinstruments"
+
+    def test_lowercases(self):
+        assert normalize_name("Voltage") == "voltage"
+
+    def test_idempotent(self):
+        name = "  Forward   Voltage  (V)  "
+        assert normalize_name(name) == normalize_name(normalize_name(name))
+
+    def test_removes_punctuation(self):
+        assert normalize_name("TI, Inc.") == "tiinc"
+
+    def test_matches_without_spaces(self):
+        assert normalize_name("texasinstruments") == normalize_name("Texas Instruments")
+
+
+class TestParameterNormalization:
+    """Normalization deduplicates parameter templates across whitespace/case variants."""
+
+    def test_service_finds_template_despite_whitespace_variant(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        template = _Template("Voltage", "V")
+        result, _ = _run_service(
+            monkeypatch,
+            runtime,
+            fresh=_make_fresh(
+                parameters=[PartParameter(name="  Voltage  ", value="5V", units="V")]
+            ),
+            templates=[template],
+        )
+
+        assert "parameter:  Voltage  " in result["updated"]
+
+    def test_service_finds_template_despite_case_variant(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        template = _Template("voltage", "V")
+        result, _ = _run_service(
+            monkeypatch,
+            runtime,
+            fresh=_make_fresh(parameters=[PartParameter(name="Voltage", value="5V", units="V")]),
+            templates=[template],
+        )
+
+        assert "parameter:Voltage" in result["updated"]
+
+    def test_base_finds_template_despite_case_variant(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        template = _Template("voltage", "V")
+        result, _ = _run_base(
+            monkeypatch,
+            runtime,
+            fresh=_make_fresh(parameters=[PartParameter(name="Voltage", value="5V", units="V")]),
+            templates=[template],
+        )
+
+        assert "parameter:Voltage" in result["updated"]
+
+    def test_service_no_duplicate_template_created(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        template = _Template("Voltage", "V")
+        harness = _install_backend(
+            monkeypatch,
+            runtime,
+            templates=[template],
+        )
+        plugin = _ServicePlugin(
+            _make_fresh(parameters=[PartParameter(name="voltage", value="5V", units="V")])
+        )
+        enrich_module.enrich_part_for_provider(
+            plugin,
+            "test-provider",
+            harness.part.pk,
+            dry_run=False,
+        )
+
+        # Should reuse existing template, not create a new one
+        assert len(harness.template_manager.templates) == 1
+
+
+class TestCompanyNormalization:
+    """Normalization deduplicates manufacturer companies across whitespace/case."""
+
+    def test_service_reuses_company_despite_whitespace(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        supplier_part = _make_supplier_part()
+        supplier_part.manufacturer_part = None
+        result, harness = _run_service(
+            monkeypatch,
+            runtime,
+            supplier_part=supplier_part,
+            fresh=_make_fresh(manufacturer_name="  TI  ", manufacturer_part_number="LM358"),
+        )
+
+        assert "manufacturer_part:link" in result["updated"]
+        assert len(harness.company_manager.companies) == 1
+
+    def test_service_reuses_company_despite_case(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        supplier_part = _make_supplier_part()
+        supplier_part.manufacturer_part = None
+        result, harness = _run_service(
+            monkeypatch,
+            runtime,
+            supplier_part=supplier_part,
+            fresh=_make_fresh(manufacturer_name="ti", manufacturer_part_number="LM358"),
+        )
+
+        assert "manufacturer_part:link" in result["updated"]
+        assert len(harness.company_manager.companies) == 1
+
+
+class _UserParamRecord(_ParamRecord):
+    """Parameter record that tracks updated_by for testing."""
+
+    def __init__(self, template: _Template, model_id: int, value: str):
+        super().__init__(template=template, model_id=model_id, value=value)
+        self.updated_by = None
+
+
+class TestUserAttribution:
+    """User is set as updated_by on parameter rows when supported."""
+
+    def test_service_sets_updated_by_on_create(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        test_user = SimpleNamespace(username="testuser", pk=99)
+        harness = _install_backend(monkeypatch, runtime)
+        plugin = _ServicePlugin(_make_fresh())
+        result = enrich_module.enrich_part_for_provider(
+            plugin,
+            "test-provider",
+            harness.part.pk,
+            dry_run=False,
+            user=test_user,
+        )
+
+        assert "parameter:Voltage" in result["updated"]
+
+    def test_service_sets_updated_by_on_update(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        test_user = SimpleNamespace(username="testuser", pk=99)
+        template = _Template("Voltage", "V")
+        param = _UserParamRecord(template=template, model_id=42, value="3V")
+        result, _ = _run_service(
+            monkeypatch,
+            runtime,
+            templates=[template],
+            parameters=[param],
+            user=test_user,
+        )
+
+        assert "parameter:Voltage" in result["updated"]
+        assert param.updated_by is test_user
+
+    def test_base_sets_updated_by_on_update(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        test_user = SimpleNamespace(username="testuser", pk=99)
+        template = _Template("Voltage", "V")
+        param = _UserParamRecord(template=template, model_id=42, value="3V")
+        result, _ = _run_base(
+            monkeypatch,
+            runtime,
+            templates=[template],
+            parameters=[param],
+            user=test_user,
+        )
+
+        assert "parameter:Voltage" in result["updated"]
+        assert param.updated_by is test_user
+
+    def test_no_user_is_safe(self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace):
+        template = _Template("Voltage", "V")
+        param = _ParamRecord(template=template, model_id=42, value="3V")
+        result, _ = _run_service(
+            monkeypatch,
+            runtime,
+            templates=[template],
+            parameters=[param],
+            user=None,
+        )
+
+        assert "parameter:Voltage" in result["updated"]
+
+    def test_supplier_param_gets_user_on_update(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        test_user = SimpleNamespace(username="testuser", pk=99)
+        template = _Template("Voltage", "V")
+        part_param = _UserParamRecord(template=template, model_id=42, value="3V")
+        supplier_param = _UserParamRecord(template=template, model_id=84, value="3V")
+        result, _ = _run_service(
+            monkeypatch,
+            runtime,
+            templates=[template],
+            parameters=[part_param, supplier_param],
+            user=test_user,
+        )
+
+        assert "supplier_parameter:Voltage" in result["updated"]
+        assert supplier_param.updated_by is test_user
