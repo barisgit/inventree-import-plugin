@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "inventree-import-plugin"
-version = "0.2.0"
+version = "0.2.1"
 description = "Combined InvenTree supplier import and enrich plugin for Mouser and LCSC"
 requires-python = ">=3.10"
 license = { text = "MIT" }

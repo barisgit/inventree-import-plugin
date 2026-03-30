@@ -11,6 +11,9 @@ const externalLibs: Record<string, string> = {
 
 const externalKeys = Object.keys(externalLibs);
 
+// Bump this version when deploying an updated enrich panel bundle.
+const ENRICH_PANEL_ENTRY_NAME = 'enrich-panel-v4';
+
 export default defineConfig({
   plugins: [
     react({
@@ -25,7 +28,10 @@ export default defineConfig({
     sourcemap: true,
     rollupOptions: {
       preserveEntrySignatures: 'exports-only',
-      input: ['./src/EnrichPanelV2.tsx', './src/Settings.tsx'],
+      input: {
+        [ENRICH_PANEL_ENTRY_NAME]: './src/EnrichPanelV2.tsx',
+        Settings: './src/Settings.tsx',
+      },
       output: [
         {
           dir: '../inventree_import_plugin/static',

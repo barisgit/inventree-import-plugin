@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from inventree_import_plugin.models import PartData
 
-from inventree_import_plugin.core import InvenTreeImportPlugin
+from inventree_import_plugin.core import ENRICH_PANEL_ASSET, InvenTreeImportPlugin
 
 
 def _settings(**overrides: object):
@@ -53,7 +53,7 @@ class TestCombinedPluginUi:
 
         assert (
             panels[0]["source"]
-            == f"/static/plugins/{plugin.SLUG}/EnrichPanelV2.js:renderEnrichPanel"
+            == f"/static/plugins/{plugin.SLUG}/{ENRICH_PANEL_ASSET}:renderEnrichPanel"
         )
 
     def test_partcategory_panel_context(self) -> None:

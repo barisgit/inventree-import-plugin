@@ -15,6 +15,9 @@ from inventree_import_plugin.providers import get_provider_adapter, get_provider
 from inventree_import_plugin.providers.base import ProviderAdapter
 from inventree_import_plugin.services import parse_bulk_payload
 
+# Bump this version when deploying an updated enrich panel bundle.
+ENRICH_PANEL_ASSET = "enrich-panel-v4.js"
+
 
 class InvenTreeImportPlugin(BaseImportPlugin):
     TITLE = "Supplier Part Import"
@@ -192,7 +195,7 @@ class InvenTreeImportPlugin(BaseImportPlugin):
                 "title": title,
                 "description": description,
                 "icon": "ti:refresh-dot:outline",
-                "source": f"/static/plugins/{self.SLUG}/EnrichPanelV2.js:renderEnrichPanel",
+                "source": f"/static/plugins/{self.SLUG}/{ENRICH_PANEL_ASSET}:renderEnrichPanel",
                 "context": {"plugin_slug": self.SLUG},
             }
         ]
