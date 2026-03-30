@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import sys
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from inventree_import_plugin.models import PartData
@@ -48,29 +46,11 @@ class TestCombinedPluginSuppliers:
 
 
 class TestCombinedPluginUi:
-    def test_part_panel_uses_hashed_asset_from_manifest(self) -> None:
+    def test_part_panel_uses_enrich_panel_asset(self) -> None:
         plugin = InvenTreeImportPlugin()
         plugin.plugin_static_file = lambda path: f"static/{path}"
 
-        with patch.object(
-            InvenTreeImportPlugin,
-            "_resolve_enrich_panel_asset",
-            return_value="EnrichPanelV2-abc123.js",
-        ):
-            panels = plugin.get_ui_panels(None, {"target_model": "part"})
-
-        assert panels[0]["source"] == "static/EnrichPanelV2-abc123.js:renderEnrichPanel"
-
-    def test_part_panel_falls_back_when_manifest_missing(self) -> None:
-        plugin = InvenTreeImportPlugin()
-        plugin.plugin_static_file = lambda path: f"static/{path}"
-
-        with patch.object(
-            InvenTreeImportPlugin,
-            "_MANIFEST_PATH",
-            Path("/nonexistent/.vite/manifest.json"),
-        ):
-            panels = plugin.get_ui_panels(None, {"target_model": "part"})
+        panels = plugin.get_ui_panels(None, {"target_model": "part"})
 
         assert panels[0]["source"] == "static/EnrichPanelV2.js:renderEnrichPanel"
 
@@ -78,12 +58,7 @@ class TestCombinedPluginUi:
         plugin = InvenTreeImportPlugin()
         plugin.plugin_static_file = lambda path: f"static/{path}"
 
-        with patch.object(
-            InvenTreeImportPlugin,
-            "_MANIFEST_PATH",
-            Path("/nonexistent/.vite/manifest.json"),
-        ):
-            panels = plugin.get_ui_panels(None, {"target_model": "partcategory"})
+        panels = plugin.get_ui_panels(None, {"target_model": "partcategory"})
 
         assert len(panels) == 1
         assert panels[0]["key"] == "supplier-enrich"
@@ -111,135 +86,6 @@ class TestCombinedPluginUi:
         items = plugin.get_ui_navigation_items(None, {})
 
         assert items == []
-
-
-class TestFindCollectedAsset:
-    """Tests for the _find_collected_asset filesystem probe."""
-
-    @staticmethod
-    def _with_django_settings(static_root: str | None) -> dict[str, MagicMock]:
-        """Build mock django.conf module with the given STATIC_ROOT."""
-        if static_root is not None:
-            settings_mock = MagicMock(STATIC_ROOT=static_root)
-        else:
-            settings_mock = MagicMock(spec=[])
-        conf_mock = MagicMock(settings=settings_mock)
-        return {"django": MagicMock(), "django.conf": conf_mock}
-
-    def test_returns_hashed_filename_from_static_root(self, tmp_path: Path) -> None:
-        plugin_dir = tmp_path / "plugins" / "inventree-import"
-        plugin_dir.mkdir(parents=True)
-        (plugin_dir / "EnrichPanelV2-abc123.js").write_text("// js")
-        (plugin_dir / "EnrichPanelV2-abc123.js.map").write_text("{}")
-
-        with patch.dict(sys.modules, self._with_django_settings(str(tmp_path))):
-            result = InvenTreeImportPlugin._find_collected_asset()
-
-        assert result == "EnrichPanelV2-abc123.js"
-
-    def test_excludes_source_maps(self, tmp_path: Path) -> None:
-        plugin_dir = tmp_path / "plugins" / "inventree-import"
-        plugin_dir.mkdir(parents=True)
-        (plugin_dir / "EnrichPanelV2-abc123.js.map").write_text("{}")
-
-        with patch.dict(sys.modules, self._with_django_settings(str(tmp_path))):
-            result = InvenTreeImportPlugin._find_collected_asset()
-
-        assert result is None
-
-    def test_returns_none_when_static_root_unset(self) -> None:
-        with patch.dict(sys.modules, self._with_django_settings(None)):
-            result = InvenTreeImportPlugin._find_collected_asset()
-
-        assert result is None
-
-    def test_returns_none_when_dir_missing(self, tmp_path: Path) -> None:
-        with patch.dict(sys.modules, self._with_django_settings(str(tmp_path))):
-            result = InvenTreeImportPlugin._find_collected_asset()
-
-        assert result is None
-
-    def test_returns_none_when_no_django(self) -> None:
-        with patch.dict(sys.modules, {}, clear=False):
-            # Remove django modules if present to simulate no-Django
-            saved = {}
-            for key in list(sys.modules):
-                if key.startswith("django"):
-                    saved[key] = sys.modules.pop(key)
-            try:
-                result = InvenTreeImportPlugin._find_collected_asset()
-            finally:
-                sys.modules.update(saved)
-
-        assert result is None
-
-
-class TestResolveEnrichPanelAsset:
-    def test_prefers_collected_static_over_manifest(self, tmp_path: Path) -> None:
-        plugin_dir = tmp_path / "plugins" / "inventree-import"
-        plugin_dir.mkdir(parents=True)
-        (plugin_dir / "EnrichPanelV2-collected.js").write_text("// js")
-
-        conf_mock = MagicMock(settings=MagicMock(STATIC_ROOT=str(tmp_path)))
-        with patch.dict(sys.modules, {"django": MagicMock(), "django.conf": conf_mock}):
-            result = InvenTreeImportPlugin._resolve_enrich_panel_asset()
-
-        assert result == "EnrichPanelV2-collected.js"
-
-    def test_returns_hashed_filename_from_manifest(self) -> None:
-        manifest = {"src/EnrichPanelV2.tsx": {"file": "EnrichPanelV2-abc123.js"}}
-        mock_file = MagicMock()
-        with (
-            patch.object(InvenTreeImportPlugin, "_find_collected_asset", return_value=None),
-            patch.object(InvenTreeImportPlugin, "_MANIFEST_PATH") as mock_path,
-            patch("inventree_import_plugin.core.json.load", return_value=manifest),
-        ):
-            mock_path.open.return_value.__enter__ = MagicMock(return_value=mock_file)
-            mock_path.open.return_value.__exit__ = MagicMock(return_value=False)
-            result = InvenTreeImportPlugin._resolve_enrich_panel_asset()
-
-        assert result == "EnrichPanelV2-abc123.js"
-
-    def test_falls_back_when_manifest_file_missing(self) -> None:
-        with (
-            patch.object(InvenTreeImportPlugin, "_find_collected_asset", return_value=None),
-            patch.object(
-                InvenTreeImportPlugin,
-                "_MANIFEST_PATH",
-                Path("/nonexistent/.vite/manifest.json"),
-            ),
-        ):
-            result = InvenTreeImportPlugin._resolve_enrich_panel_asset()
-
-        assert result == "EnrichPanelV2.js"
-
-    def test_falls_back_when_entry_key_missing(self) -> None:
-        manifest = {"src/Other.tsx": {"file": "Other.js"}}
-        with (
-            patch.object(InvenTreeImportPlugin, "_find_collected_asset", return_value=None),
-            patch.object(InvenTreeImportPlugin, "_MANIFEST_PATH") as mock_path,
-            patch("inventree_import_plugin.core.json.load", return_value=manifest),
-        ):
-            mock_path.open.return_value.__enter__ = MagicMock()
-            mock_path.open.return_value.__exit__ = MagicMock(return_value=False)
-            result = InvenTreeImportPlugin._resolve_enrich_panel_asset()
-
-        assert result == "EnrichPanelV2.js"
-
-    def test_falls_back_on_invalid_json(self) -> None:
-        with (
-            patch.object(InvenTreeImportPlugin, "_find_collected_asset", return_value=None),
-            patch.object(InvenTreeImportPlugin, "_MANIFEST_PATH") as mock_path,
-            patch(
-                "inventree_import_plugin.core.json.load",
-                side_effect=json.JSONDecodeError("", "", 0),
-            ),
-        ):
-            mock_path.open.return_value.__enter__ = MagicMock()
-            mock_path.open.return_value.__exit__ = MagicMock(return_value=False)
-            result = InvenTreeImportPlugin._resolve_enrich_panel_asset()
-
-        assert result == "EnrichPanelV2.js"
 
 
 class TestBulkPayloadParsing:

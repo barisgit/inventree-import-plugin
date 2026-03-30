@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any
 
 from inventree_import_plugin import PLUGIN_VERSION
@@ -171,54 +169,6 @@ class InvenTreeImportPlugin(BaseImportPlugin):
         return supplier_part
 
     _PANEL_TARGET_MODELS = {"part", "partcategory"}
-    _MANIFEST_PATH = Path(__file__).parent / "static" / ".vite" / "manifest.json"
-    _MANIFEST_ENTRY_KEY = "src/EnrichPanelV2.tsx"
-    _FALLBACK_ASSET = "EnrichPanelV2.js"
-    _COLLECTED_STATIC_SUBDIR = Path("plugins") / "inventree-import"
-
-    @classmethod
-    def _resolve_enrich_panel_asset(cls) -> str:
-        """Resolve the hashed JS filename.
-
-        Priority:
-        1. Collected static asset under STATIC_ROOT (EnrichPanelV2-*.js, no .map)
-        2. Vite package manifest
-        3. Plain EnrichPanelV2.js fallback
-        """
-        collected = cls._find_collected_asset()
-        if collected is not None:
-            return collected
-        try:
-            with cls._MANIFEST_PATH.open("r", encoding="utf-8") as f:
-                manifest = json.load(f)
-            return manifest[cls._MANIFEST_ENTRY_KEY]["file"]
-        except (OSError, KeyError, json.JSONDecodeError):
-            return cls._FALLBACK_ASSET
-
-    @classmethod
-    def _find_collected_asset(cls) -> str | None:
-        """Look for EnrichPanelV2-*.js in Django's STATIC_ROOT collected static."""
-        try:
-            from django.conf import settings as django_settings
-
-            static_root = getattr(django_settings, "STATIC_ROOT", None)
-        except Exception:
-            return None
-        if not static_root:
-            return None
-        search_dir = Path(static_root) / cls._COLLECTED_STATIC_SUBDIR
-        if not search_dir.is_dir():
-            return None
-        candidates = sorted(
-            (
-                p
-                for p in search_dir.iterdir()
-                if p.name.startswith("EnrichPanelV2-") and p.suffix == ".js"
-            ),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        return candidates[0].name if candidates else None
 
     def get_ui_panels(
         self, request: Any, context: dict[str, Any] | None = None, **kwargs: Any
@@ -236,14 +186,13 @@ class InvenTreeImportPlugin(BaseImportPlugin):
             title = "Enrich Part"
             description = "Preview and apply updates from configured suppliers"
 
-        asset = self._resolve_enrich_panel_asset()
         return [
             {
                 "key": "supplier-enrich",
                 "title": title,
                 "description": description,
                 "icon": "ti:refresh-dot:outline",
-                "source": self.plugin_static_file(f"{asset}:renderEnrichPanel"),
+                "source": self.plugin_static_file("EnrichPanelV2.js:renderEnrichPanel"),
                 "context": {"plugin_slug": self.SLUG},
             }
         ]
