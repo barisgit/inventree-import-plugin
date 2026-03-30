@@ -61,14 +61,16 @@ type DiffParameterRow = {
   units?: string;
   current: string | null;
   incoming: string | null;
-  status: 'new' | 'skipped';
+  status: 'new' | 'skipped' | 'updated';
 };
 
 type DiffPriceBreakRow = {
   quantity: number;
+  current_price?: number | null;
+  current_currency?: string | null;
   incoming_price: number;
   incoming_currency: string;
-  status: 'new' | 'skipped';
+  status: 'new' | 'skipped' | 'updated';
 };
 
 type DiffPayload = {
@@ -143,6 +145,8 @@ type RichPartFieldItem = ParsedItem & {
 };
 
 type RichPriceBreakItem = ParsedItem & {
+  currentPrice: number | null;
+  currentCurrency: string | null;
   incomingPrice: number | null;
   incomingCurrency: string | null;
 };
@@ -312,12 +316,20 @@ function buildPriceBreakItems(result: EnrichResult): RichPriceBreakItem[] {
   const diff = result.diff;
   if (!diff) {
     const sections = parseResultKeys(result);
-    return sections.priceBreaks.map((item) => ({ ...item, incomingPrice: null, incomingCurrency: null }));
+    return sections.priceBreaks.map((item) => ({
+      ...item,
+      currentPrice: null,
+      currentCurrency: null,
+      incomingPrice: null,
+      incomingCurrency: null,
+    }));
   }
   return diff.price_breaks.map((row) => ({
     key: `price_break:${row.quantity}`,
     label: `Qty ${row.quantity}`,
     status: authoritativeStatus(`price_break:${row.quantity}`, result),
+    currentPrice: row.current_price ?? null,
+    currentCurrency: row.current_currency ?? null,
     incomingPrice: row.incoming_price,
     incomingCurrency: row.incoming_currency,
   }));
@@ -566,7 +578,7 @@ function PriceBreakRows({ items, selectable, selectedKeys, onToggleKey }: {
   items: RichPriceBreakItem[];
 } & SelectionProps) {
   if (items.length === 0) return null;
-  const hasRichData = items.some((i) => i.incomingPrice !== null);
+  const hasRichData = items.some((i) => i.incomingPrice !== null || i.currentPrice !== null);
   const updates = items.filter((i) => i.status === 'update');
   const skips = items.filter((i) => i.status === 'skip');
   const sorted = [...updates, ...skips];
@@ -578,6 +590,7 @@ function PriceBreakRows({ items, selectable, selectedKeys, onToggleKey }: {
           <Table.Tr>
             {selectable && <Table.Th w={40} />}
             <Table.Th><Text size="xs" fw={600}>Quantity</Text></Table.Th>
+            {hasRichData && <Table.Th><Text size="xs" fw={600}>Current Price</Text></Table.Th>}
             {hasRichData && <Table.Th><Text size="xs" fw={600}>Incoming Price</Text></Table.Th>}
             <Table.Th w={100}><Text size="xs" fw={600}>Status</Text></Table.Th>
           </Table.Tr>
@@ -603,10 +616,20 @@ function PriceBreakRows({ items, selectable, selectedKeys, onToggleKey }: {
               <Table.Td><Text size="sm">{item.label}</Text></Table.Td>
               {hasRichData && (
                 <Table.Td>
+                  {item.currentPrice != null ? (
+                    <Text size="sm" c="dimmed">
+                      {item.currentCurrency ? `${item.currentCurrency} ` : ''}{item.currentPrice}
+                    </Text>
+                  ) : (
+                    <Text size="xs" c="dimmed" fs="italic">-</Text>
+                  )}
+                </Table.Td>
+              )}
+              {hasRichData && (
+                <Table.Td>
                   {item.incomingPrice != null ? (
-                    <Text size="sm">
-                      {item.incomingCurrency ? `${item.incomingCurrency} ` : ''}
-                      {item.incomingPrice}
+                    <Text size="sm" c="green.8">
+                      {item.incomingCurrency ? `${item.incomingCurrency} ` : ''}{item.incomingPrice}
                     </Text>
                   ) : (
                     <Text size="xs" c="dimmed" fs="italic">-</Text>

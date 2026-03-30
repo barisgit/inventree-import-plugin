@@ -106,6 +106,24 @@ def _make_common_stubs() -> dict[str, types.ModuleType]:
     return {"common": common_mod, "common.models": models_mod}
 
 
+def _make_django_db_stubs() -> dict[str, types.ModuleType]:
+    """Return minimal stubs for django.db."""
+    django_mod = types.ModuleType("django")
+    django_db_mod = types.ModuleType("django.db")
+
+    class _Transaction:
+        @staticmethod
+        def atomic() -> object:
+            from contextlib import nullcontext
+
+            return nullcontext()
+
+    django_db_mod.transaction = _Transaction  # type: ignore[attr-defined]
+    django_mod.db = django_db_mod  # type: ignore[attr-defined]
+
+    return {"django": django_mod, "django.db": django_db_mod}
+
+
 def _make_django_contenttypes_stubs() -> dict[str, types.ModuleType]:
     """Return minimal stubs for django.contrib.contenttypes."""
     django_contrib_mod = types.ModuleType("django.contrib")
@@ -205,6 +223,9 @@ def _make_plugin_stubs() -> dict[str, types.ModuleType]:
 
 
 # Register the stubs before any project module is imported.
+if "django" not in sys.modules:
+    for _mod_name, _mod in _make_django_db_stubs().items():
+        sys.modules[_mod_name] = _mod
 if "plugin" not in sys.modules:
     for _mod_name, _mod in _make_plugin_stubs().items():
         sys.modules[_mod_name] = _mod

@@ -275,12 +275,13 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
     # ------------------------------------------------------------------
 
     def _enrich_part(self, part_id: int, *, dry_run: bool = False) -> dict[str, Any]:
-        """Fetch fresh supplier data and update supplier-owned fields.
+        """Fetch fresh supplier data and update enriched fields.
 
-        Supplier-owned fields (description, link) are updated when the
-        supplier provides a different value.  Availability is updated when
-        stock is present and has changed.  Other fields (image, datasheet,
-        parameters) are only added when missing.
+        SupplierPart fields (description, link, available): update-on-change.
+        Part description/link: update-on-change.
+        Datasheet link: update-on-change (replaces existing attachment URL).
+        Parameters and supplier_parameter mirrors: update-on-change.
+        Image: add-only (never replaces an existing image).
 
         When *dry_run* is ``True`` the method computes what *would* change
         without persisting anything, and returns the preview dict.
@@ -353,11 +354,11 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
                     supplier_part.available = available_quantity
                     supplier_part.save(update_fields=["available"])
 
-        # Part description/link — fill from supplier data when empty
+        # Part description/link — update when values differ
         _part_updates: dict[str, Any] = {}
-        if not getattr(part, "description", None) and fresh.description:
+        if fresh.description and getattr(part, "description", None) != fresh.description:
             _part_updates["description"] = fresh.description
-        if not getattr(part, "link", None) and fresh.link:
+        if fresh.link and getattr(part, "link", None) != fresh.link:
             _part_updates["link"] = fresh.link
 
         if _part_updates:
@@ -385,15 +386,16 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
         else:
             skipped.append("image")
 
-        # Datasheet link — stored as an external-link Part attachment
+        # Datasheet link — update-on-change (external-link Part attachment)
         from common.models import Attachment
 
         _ds_comment = "Datasheet (supplier)"
-        _has_ds = Attachment.objects.filter(
+        _existing_ds = Attachment.objects.filter(
             model_type="part", model_id=part.pk, comment=_ds_comment
-        ).exists()
+        ).first()
+        _existing_ds_link = getattr(_existing_ds, "link", None) if _existing_ds else None
 
-        if fresh.datasheet_url and not _has_ds:
+        if fresh.datasheet_url and not _existing_ds_link:
             if dry_run:
                 updated.append("datasheet_link")
             else:
@@ -410,15 +412,29 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
                         "Failed to create datasheet attachment for part %s: %s", part_id, exc
                     )
                     errors.append(f"datasheet_link: {exc}")
+        elif fresh.datasheet_url and _existing_ds_link != fresh.datasheet_url:
+            if dry_run:
+                updated.append("datasheet_link")
+            else:
+                try:
+                    _existing_ds.link = fresh.datasheet_url
+                    _existing_ds.save(update_fields=["link"])
+                    updated.append("datasheet_link")
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to update datasheet attachment for part %s: %s", part_id, exc
+                    )
+                    errors.append(f"datasheet_link: {exc}")
         else:
             skipped.append("datasheet_link")
 
-        # Price breaks — add quantities not already present
-        existing_quantities: set[int] = set(
-            SupplierPriceBreak.objects.filter(part=supplier_part).values_list("quantity", flat=True)
-        )
+        # Price breaks — add new quantities or update changed ones
+        existing_pb_map: dict[int, Any] = {
+            pb.quantity: pb for pb in SupplierPriceBreak.objects.filter(part=supplier_part)
+        }
         for pb in fresh.price_breaks:
-            if pb.quantity not in existing_quantities:
+            existing = existing_pb_map.get(pb.quantity)
+            if existing is None:
                 if dry_run:
                     updated.append(f"price_break:{pb.quantity}")
                 else:
@@ -432,10 +448,21 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
                         updated.append(f"price_break:{pb.quantity}")
                     except Exception as exc:
                         errors.append(f"price_break:{pb.quantity}: {exc}")
+            elif existing.price != pb.price or existing.price_currency != pb.currency:
+                if dry_run:
+                    updated.append(f"price_break:{pb.quantity}")
+                else:
+                    try:
+                        existing.price = pb.price
+                        existing.price_currency = pb.currency
+                        existing.save(update_fields=["price", "price_currency"])
+                        updated.append(f"price_break:{pb.quantity}")
+                    except Exception as exc:
+                        errors.append(f"price_break:{pb.quantity}: {exc}")
             else:
                 skipped.append(f"price_break:{pb.quantity}")
 
-        # Parameters — add missing ones (do not overwrite existing values)
+        # Parameters — create missing ones or update changed values
         for param in fresh.parameters:
             try:
                 if dry_run:
@@ -450,28 +477,52 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
                     )
 
                 parameter_kwargs = _parameter_filter_kwargs(part, template, content_type_model)
-                if not parameter_model.objects.filter(**parameter_kwargs).exists():
+                existing_param = parameter_model.objects.filter(**parameter_kwargs).first()
+                if existing_param is None:
                     if dry_run:
                         updated.append(f"parameter:{param.name}")
                     else:
                         parameter_model.objects.create(**parameter_kwargs, data=param.value)
                         updated.append(f"parameter:{param.name}")
                 else:
-                    skipped.append(f"parameter:{param.name}")
+                    current_value = getattr(existing_param, "data", None) or getattr(
+                        existing_param, "value", None
+                    )
+                    if current_value != param.value:
+                        if dry_run:
+                            updated.append(f"parameter:{param.name}")
+                        else:
+                            existing_param.data = param.value
+                            existing_param.save(update_fields=["data"])
+                            updated.append(f"parameter:{param.name}")
+                    else:
+                        skipped.append(f"parameter:{param.name}")
 
                 # Mirror onto SupplierPart when using generic parameter model
                 if content_type_model is not None:
                     sp_kwargs = _parameter_filter_kwargs(
                         supplier_part, template, content_type_model
                     )
-                    if not parameter_model.objects.filter(**sp_kwargs).exists():
+                    existing_sp_param = parameter_model.objects.filter(**sp_kwargs).first()
+                    if existing_sp_param is None:
                         if dry_run:
                             updated.append(f"supplier_parameter:{param.name}")
                         else:
                             parameter_model.objects.create(**sp_kwargs, data=param.value)
                             updated.append(f"supplier_parameter:{param.name}")
                     else:
-                        skipped.append(f"supplier_parameter:{param.name}")
+                        current_sp_value = getattr(existing_sp_param, "data", None) or getattr(
+                            existing_sp_param, "value", None
+                        )
+                        if current_sp_value != param.value:
+                            if dry_run:
+                                updated.append(f"supplier_parameter:{param.name}")
+                            else:
+                                existing_sp_param.data = param.value
+                                existing_sp_param.save(update_fields=["data"])
+                                updated.append(f"supplier_parameter:{param.name}")
+                        else:
+                            skipped.append(f"supplier_parameter:{param.name}")
             except Exception as exc:
                 errors.append(f"parameter:{param.name}: {exc}")
 

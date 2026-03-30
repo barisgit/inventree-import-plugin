@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import nullcontext
 from typing import Any, cast
 
 from inventree_import_plugin.base import (
@@ -61,6 +62,20 @@ def _create_datasheet_attachment(part: Any, datasheet_url: str) -> None:
     )
 
 
+def _update_datasheet_attachment(part: Any, datasheet_url: str) -> None:
+    """Update the link URL on the existing datasheet attachment."""
+    from common.models import Attachment
+
+    att = Attachment.objects.filter(
+        model_type="part",
+        model_id=part.pk,
+        comment=DATASHEET_ATTACHMENT_COMMENT,
+    ).first()
+    if att is not None:
+        att.link = datasheet_url
+        att.save(update_fields=["link"])
+
+
 def get_provider_state(plugin: Any, part_id: int) -> dict[str, Any]:
     from company.models import SupplierPart
     from part.models import Part
@@ -117,7 +132,7 @@ def _build_diff(
     part: Any,
     fresh: Any,
     supplier_part: Any | None = None,
-    existing_quantities: set[int],
+    existing_price_breaks: dict[int, tuple[float, str]],
     parameter_model: Any,
     parameter_template_model: Any,
     content_type_model: Any,
@@ -149,22 +164,25 @@ def _build_diff(
                     {"field": field, "current": current, "incoming": value, "status": "skipped"}
                 )
 
-    # Part description/link diff
+    # Part description/link diff — update-on-change
     part_field_rows: list[dict[str, Any]] = []
     for field in ("description", "link"):
         current = getattr(part, field, None) or None
         incoming = getattr(fresh, field, None) or None
-        changed = not current and incoming
+        if incoming and current != incoming:
+            status = "updated" if current else "new"
+        else:
+            status = "skipped"
         part_field_rows.append(
             {
                 "field": field,
                 "current": current,
                 "incoming": incoming,
-                "status": "new" if changed else "skipped",
+                "status": status,
             }
         )
 
-    # Image diff
+    # Image diff (add-only)
     image_diff: dict[str, Any] | None = None
     if fresh.image_url and not part.image:
         image_diff = {
@@ -188,7 +206,7 @@ def _build_diff(
             "status": "skipped" if not fresh.image_url else "new",
         }
 
-    # Datasheet diff (external-link attachment)
+    # Datasheet diff — update-on-change (external-link attachment)
     existing_ds_link = _get_existing_datasheet_link(part)
     datasheet_diff: dict[str, Any] | None = None
     if fresh.datasheet_url and not existing_ds_link:
@@ -197,6 +215,13 @@ def _build_diff(
             "current": None,
             "incoming": fresh.datasheet_url,
             "status": "new",
+        }
+    elif fresh.datasheet_url and existing_ds_link and existing_ds_link != fresh.datasheet_url:
+        datasheet_diff = {
+            "field": "datasheet_link",
+            "current": existing_ds_link,
+            "incoming": fresh.datasheet_url,
+            "status": "updated",
         }
     elif existing_ds_link:
         datasheet_diff = {
@@ -210,23 +235,48 @@ def _build_diff(
             "field": "datasheet_link",
             "current": None,
             "incoming": fresh.datasheet_url or None,
-            "status": "skipped" if not fresh.datasheet_url else "new",
+            "status": "skipped",
         }
 
     # Price break rows
     price_break_rows: list[dict[str, Any]] = []
     for pb in fresh.price_breaks:
-        exists = pb.quantity in existing_quantities
-        price_break_rows.append(
-            {
-                "quantity": pb.quantity,
-                "incoming_price": pb.price,
-                "incoming_currency": pb.currency,
-                "status": "skipped" if exists else "new",
-            }
-        )
+        existing = existing_price_breaks.get(pb.quantity)
+        if existing is None:
+            price_break_rows.append(
+                {
+                    "quantity": pb.quantity,
+                    "current_price": None,
+                    "current_currency": None,
+                    "incoming_price": pb.price,
+                    "incoming_currency": pb.currency,
+                    "status": "new",
+                }
+            )
+        elif existing[0] != pb.price or existing[1] != pb.currency:
+            price_break_rows.append(
+                {
+                    "quantity": pb.quantity,
+                    "current_price": existing[0],
+                    "current_currency": existing[1],
+                    "incoming_price": pb.price,
+                    "incoming_currency": pb.currency,
+                    "status": "updated",
+                }
+            )
+        else:
+            price_break_rows.append(
+                {
+                    "quantity": pb.quantity,
+                    "current_price": existing[0],
+                    "current_currency": existing[1],
+                    "incoming_price": pb.price,
+                    "incoming_currency": pb.currency,
+                    "status": "skipped",
+                }
+            )
 
-    # Parameter rows
+    # Parameter rows — update-on-change
     parameter_rows: list[dict[str, Any]] = []
     for param in fresh.parameters:
         template = parameter_template_model.objects.filter(name=param.name).first()
@@ -240,13 +290,19 @@ def _build_diff(
                     existing_param, "value", None
                 )
                 exists = True
+        if exists and current_value != param.value:
+            status = "updated"
+        elif exists:
+            status = "skipped"
+        else:
+            status = "new"
         parameter_rows.append(
             {
                 "name": param.name,
                 "units": param.units,
                 "current": current_value,
                 "incoming": param.value,
-                "status": "skipped" if exists else "new",
+                "status": status,
             }
         )
 
@@ -268,7 +324,33 @@ def enrich_part_for_provider(
     dry_run: bool = False,
     selected_keys: set[str] | None = None,
 ) -> dict[str, Any]:
+    """Enrich a single part from provider data.
+
+    ``selected_keys`` gates which writes are applied (``None`` = all).
+
+    **Field update policies:**
+    - SupplierPart fields (description, link, available): update-on-change
+    - Image: add-only (never replaces existing image)
+    - Part description/link: update-on-change
+    - Datasheet link: update-on-change (updates existing attachment URL)
+    - Parameters / supplier_parameters: update-on-change (updates existing values)
+
+    **parameter / supplier_parameter coupling:**
+    For each parameter, the loop processes ``parameter:<name>`` first and
+    mirrors it onto the SupplierPart as ``supplier_parameter:<name>`` (when a
+    generic ContentType-based parameter model is in use).  In apply mode
+    (``dry_run=False``) ``parameter:<name>`` is checked *before* the
+    SupplierPart mirror.  If ``parameter:<name>`` is not in ``selected_keys``
+    the entire iteration short-circuits via ``continue`` -- so the SupplierPart
+    parameter is also unconditionally skipped, regardless of whether
+    ``supplier_parameter:<name>`` appears in ``selected_keys``.  In other
+    words: selecting *only* ``supplier_parameter:X`` without ``parameter:X``
+    is a no-op -- the supplier_parameter key will be skipped.  This coupling
+    exists because the SupplierPart mirror depends on the Part parameter
+    (template lookup, existence check) having already been resolved.
+    """
     from company.models import SupplierPart, SupplierPriceBreak
+    from django.db import transaction
     from part.models import Part
 
     updated: list[str] = []
@@ -338,11 +420,11 @@ def enrich_part_for_provider(
             ),
         )
 
-    existing_quantities: set[int] = set(
-        SupplierPriceBreak.objects.filter(part=supplier_part).values_list("quantity", flat=True)
-    )
+    existing_pb_map: dict[int, Any] = {
+        pb.quantity: pb for pb in SupplierPriceBreak.objects.filter(part=supplier_part)
+    }
 
-    # SupplierPart supplier-owned fields — update when values change
+    # SupplierPart supplier-owned fields -- update when values change
     regular_updates, available_quantity = supplier_part_update_values(supplier_part, fresh)
 
     for field in regular_updates:
@@ -359,169 +441,237 @@ def enrich_part_for_provider(
         else:
             skipped.append(key)
 
-    if not dry_run:
-        allowed_updates = {
-            f: v
-            for f, v in regular_updates.items()
-            if _key_allowed(f"supplier_part:{f}", selected_keys)
-        }
-        if allowed_updates:
-            for field, value in allowed_updates.items():
-                setattr(supplier_part, field, value)
-            supplier_part.save(update_fields=list(allowed_updates.keys()))
-
-        if available_quantity is not None and _key_allowed(
-            "supplier_part:available", selected_keys
-        ):
-            if hasattr(supplier_part, "update_available_quantity"):
-                supplier_part.update_available_quantity(available_quantity)
-            else:
-                supplier_part.available = available_quantity
-                supplier_part.save(update_fields=["available"])
-
-    # Part description/link — fill from supplier data when empty
-    _part_updates: dict[str, Any] = {}
-    if not getattr(part, "description", None) and fresh.description:
-        _part_updates["description"] = fresh.description
-    if not getattr(part, "link", None) and fresh.link:
-        _part_updates["link"] = fresh.link
-
-    if _part_updates:
-        if dry_run:
-            for field in _part_updates:
-                updated.append(f"part:{field}")
-        else:
-            allowed_part_updates = {
-                f: v for f, v in _part_updates.items() if _key_allowed(f"part:{f}", selected_keys)
+    _tx = transaction.atomic() if not dry_run else nullcontext()
+    with _tx:
+        if not dry_run:
+            allowed_updates = {
+                f: v
+                for f, v in regular_updates.items()
+                if _key_allowed(f"supplier_part:{f}", selected_keys)
             }
-            if allowed_part_updates:
-                for field, value in allowed_part_updates.items():
-                    setattr(part, field, value)
-                part.save(update_fields=list(allowed_part_updates.keys()))
-                for field in allowed_part_updates:
-                    updated.append(f"part:{field}")
-            for field in _part_updates:
-                if field not in allowed_part_updates:
-                    skipped.append(f"part:{field}")
+            if allowed_updates:
+                for field, value in allowed_updates.items():
+                    setattr(supplier_part, field, value)
+                supplier_part.save(update_fields=list(allowed_updates.keys()))
 
-    if fresh.image_url and not part.image:
-        if dry_run:
-            updated.append("image")
-        elif _key_allowed("image", selected_keys):
-            try:
-                _download_and_set_image(part, fresh.image_url)
+            if available_quantity is not None and _key_allowed(
+                "supplier_part:available", selected_keys
+            ):
+                if hasattr(supplier_part, "update_available_quantity"):
+                    supplier_part.update_available_quantity(available_quantity)
+                else:
+                    supplier_part.available = available_quantity
+                    supplier_part.save(update_fields=["available"])
+
+        # Part description/link -- update when values differ
+        _part_updates: dict[str, Any] = {}
+        if fresh.description and getattr(part, "description", None) != fresh.description:
+            _part_updates["description"] = fresh.description
+        if fresh.link and getattr(part, "link", None) != fresh.link:
+            _part_updates["link"] = fresh.link
+
+        if _part_updates:
+            if dry_run:
+                for field in _part_updates:
+                    updated.append(f"part:{field}")
+            else:
+                allowed_part_updates = {
+                    f: v
+                    for f, v in _part_updates.items()
+                    if _key_allowed(f"part:{f}", selected_keys)
+                }
+                if allowed_part_updates:
+                    for field, value in allowed_part_updates.items():
+                        setattr(part, field, value)
+                    part.save(update_fields=list(allowed_part_updates.keys()))
+                    for field in allowed_part_updates:
+                        updated.append(f"part:{field}")
+                for field in _part_updates:
+                    if field not in allowed_part_updates:
+                        skipped.append(f"part:{field}")
+
+        # Image -- add-only (never replaces existing image)
+        if fresh.image_url and not part.image:
+            if dry_run:
                 updated.append("image")
-            except Exception as exc:
-                logger.warning("Failed to download image for part %s: %s", part_id, exc)
-                errors.append(f"image: {exc}")
+            elif _key_allowed("image", selected_keys):
+                try:
+                    _download_and_set_image(part, fresh.image_url)
+                    updated.append("image")
+                except Exception as exc:
+                    logger.warning("Failed to download image for part %s: %s", part_id, exc)
+                    errors.append(f"image: {exc}")
+            else:
+                skipped.append("image")
         else:
             skipped.append("image")
-    else:
-        skipped.append("image")
 
-    if fresh.datasheet_url and not _has_datasheet_attachment(part):
-        if dry_run:
-            updated.append("datasheet_link")
-        elif _key_allowed("datasheet_link", selected_keys):
-            try:
-                _create_datasheet_attachment(part, fresh.datasheet_url)
+        # Datasheet link -- update-on-change
+        existing_ds_link = _get_existing_datasheet_link(part)
+        if fresh.datasheet_url and not existing_ds_link:
+            if dry_run:
                 updated.append("datasheet_link")
-            except Exception as exc:
-                logger.warning(
-                    "Failed to create datasheet attachment for part %s: %s", part_id, exc
-                )
-                errors.append(f"datasheet_link: {exc}")
+            elif _key_allowed("datasheet_link", selected_keys):
+                try:
+                    _create_datasheet_attachment(part, fresh.datasheet_url)
+                    updated.append("datasheet_link")
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to create datasheet attachment for part %s: %s", part_id, exc
+                    )
+                    errors.append(f"datasheet_link: {exc}")
+            else:
+                skipped.append("datasheet_link")
+        elif fresh.datasheet_url and existing_ds_link != fresh.datasheet_url:
+            if dry_run:
+                updated.append("datasheet_link")
+            elif _key_allowed("datasheet_link", selected_keys):
+                try:
+                    _update_datasheet_attachment(part, fresh.datasheet_url)
+                    updated.append("datasheet_link")
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to update datasheet attachment for part %s: %s", part_id, exc
+                    )
+                    errors.append(f"datasheet_link: {exc}")
+            else:
+                skipped.append("datasheet_link")
         else:
             skipped.append("datasheet_link")
-    else:
-        skipped.append("datasheet_link")
 
-    for price_break in fresh.price_breaks:
-        key = f"price_break:{price_break.quantity}"
-        if price_break.quantity in existing_quantities:
-            skipped.append(key)
-            continue
+        # Price breaks -- update when price/currency differs
+        for price_break in fresh.price_breaks:
+            key = f"price_break:{price_break.quantity}"
+            existing_pb = existing_pb_map.get(price_break.quantity)
 
-        if dry_run:
-            updated.append(key)
-            continue
-
-        if not _key_allowed(key, selected_keys):
-            skipped.append(key)
-            continue
-
-        try:
-            SupplierPriceBreak.objects.create(
-                part=supplier_part,
-                quantity=price_break.quantity,
-                price=price_break.price,
-                price_currency=price_break.currency,
-            )
-            updated.append(key)
-        except Exception as exc:
-            errors.append(f"{key}: {exc}")
-
-    for param in fresh.parameters:
-        key = f"parameter:{param.name}"
-        try:
-            if dry_run:
-                template = parameter_template_model.objects.filter(name=param.name).first()
-                if template is None:
-                    updated.append(key)
-                    continue
-            else:
-                if not _key_allowed(key, selected_keys):
-                    skipped.append(key)
-                    if content_type_model is not None:
-                        skipped.append(f"supplier_parameter:{param.name}")
-                    continue
-                template, _ = parameter_template_model.objects.get_or_create(
-                    name=param.name,
-                    defaults={"units": param.units},
-                )
-
-            parameter_kwargs = _parameter_filter_kwargs(part, template, content_type_model)
-            if parameter_model.objects.filter(**parameter_kwargs).exists():
+            if (
+                existing_pb is not None
+                and existing_pb.price == price_break.price
+                and existing_pb.price_currency == price_break.currency
+            ):
                 skipped.append(key)
-            else:
-                if dry_run:
-                    updated.append(key)
-                else:
-                    parameter_model.objects.create(**parameter_kwargs, data=param.value)
-                    updated.append(key)
+                continue
 
-            # Mirror onto SupplierPart when using generic parameter model
-            if content_type_model is not None:
-                sp_kwargs = _parameter_filter_kwargs(supplier_part, template, content_type_model)
-                sp_key = f"supplier_parameter:{param.name}"
-                if parameter_model.objects.filter(**sp_kwargs).exists():
-                    skipped.append(sp_key)
+            if dry_run:
+                updated.append(key)
+                continue
+
+            if not _key_allowed(key, selected_keys):
+                skipped.append(key)
+                continue
+
+            try:
+                if existing_pb is not None:
+                    existing_pb.price = price_break.price
+                    existing_pb.price_currency = price_break.currency
+                    existing_pb.save(update_fields=["price", "price_currency"])
+                else:
+                    SupplierPriceBreak.objects.create(
+                        part=supplier_part,
+                        quantity=price_break.quantity,
+                        price=price_break.price,
+                        price_currency=price_break.currency,
+                    )
+                updated.append(key)
+            except Exception as exc:
+                errors.append(f"{key}: {exc}")
+
+        # Parameters -- update-on-change
+        for param in fresh.parameters:
+            key = f"parameter:{param.name}"
+            try:
+                if dry_run:
+                    template = parameter_template_model.objects.filter(name=param.name).first()
+                    if template is None:
+                        updated.append(key)
+                        continue
+                else:
+                    # Coupling gate: if parameter:X is not selected, skip the
+                    # entire iteration -- including the supplier_parameter:X
+                    # mirror below, which depends on template/existence
+                    # resolution happening first.
+                    if not _key_allowed(key, selected_keys):
+                        skipped.append(key)
+                        if content_type_model is not None:
+                            skipped.append(f"supplier_parameter:{param.name}")
+                        continue
+                    template, _ = parameter_template_model.objects.get_or_create(
+                        name=param.name,
+                        defaults={"units": param.units},
+                    )
+
+                parameter_kwargs = _parameter_filter_kwargs(part, template, content_type_model)
+                existing_param = parameter_model.objects.filter(**parameter_kwargs).first()
+                if existing_param is not None:
+                    current_value = getattr(existing_param, "data", None) or getattr(
+                        existing_param, "value", None
+                    )
+                    if current_value != param.value:
+                        if dry_run:
+                            updated.append(key)
+                        else:
+                            existing_param.data = param.value
+                            existing_param.save(update_fields=["data"])
+                            updated.append(key)
+                    else:
+                        skipped.append(key)
                 else:
                     if dry_run:
-                        updated.append(sp_key)
-                    elif _key_allowed(sp_key, selected_keys):
-                        parameter_model.objects.create(**sp_kwargs, data=param.value)
-                        updated.append(sp_key)
+                        updated.append(key)
                     else:
-                        skipped.append(sp_key)
-        except Exception as exc:
-            errors.append(f"parameter:{param.name}: {exc}")
+                        parameter_model.objects.create(**parameter_kwargs, data=param.value)
+                        updated.append(key)
 
-    diff = _build_diff(
-        dry_run=dry_run,
-        part=part,
-        fresh=fresh,
-        supplier_part=supplier_part,
-        existing_quantities=existing_quantities,
-        parameter_model=parameter_model,
-        parameter_template_model=parameter_template_model,
-        content_type_model=content_type_model,
-    )
+                # Mirror onto SupplierPart when using generic parameter model
+                if content_type_model is not None:
+                    sp_kwargs = _parameter_filter_kwargs(
+                        supplier_part, template, content_type_model
+                    )
+                    sp_key = f"supplier_parameter:{param.name}"
+                    existing_sp_param = parameter_model.objects.filter(**sp_kwargs).first()
+                    if existing_sp_param is not None:
+                        current_sp_value = getattr(existing_sp_param, "data", None) or getattr(
+                            existing_sp_param, "value", None
+                        )
+                        if current_sp_value != param.value:
+                            if dry_run:
+                                updated.append(sp_key)
+                            elif _key_allowed(sp_key, selected_keys):
+                                existing_sp_param.data = param.value
+                                existing_sp_param.save(update_fields=["data"])
+                                updated.append(sp_key)
+                            else:
+                                skipped.append(sp_key)
+                        else:
+                            skipped.append(sp_key)
+                    else:
+                        if dry_run:
+                            updated.append(sp_key)
+                        elif _key_allowed(sp_key, selected_keys):
+                            parameter_model.objects.create(**sp_kwargs, data=param.value)
+                            updated.append(sp_key)
+                        else:
+                            skipped.append(sp_key)
+            except Exception as exc:
+                errors.append(f"parameter:{param.name}: {exc}")
 
-    return cast(
-        dict[str, Any],
-        plugin._provider_result(provider_slug, part_id, updated, skipped, errors, diff=diff),
-    )
+        diff = _build_diff(
+            dry_run=dry_run,
+            part=part,
+            fresh=fresh,
+            supplier_part=supplier_part,
+            existing_price_breaks={
+                qty: (pb.price, pb.price_currency) for qty, pb in existing_pb_map.items()
+            },
+            parameter_model=parameter_model,
+            parameter_template_model=parameter_template_model,
+            content_type_model=content_type_model,
+        )
+
+        return cast(
+            dict[str, Any],
+            plugin._provider_result(provider_slug, part_id, updated, skipped, errors, diff=diff),
+        )
 
 
 def bulk_enrich(
