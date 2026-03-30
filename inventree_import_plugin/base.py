@@ -13,6 +13,8 @@ __all__ = [
     "BaseImportPlugin",
     "SearchResult",
     "Supplier",
+    "_find_by_normalized_name",
+    "_resolve_by_normalized_name",
     "normalize_name",
     "supplier_part_defaults",
     "supplier_part_update_values",
@@ -30,6 +32,52 @@ def normalize_name(name: str) -> str:
     fuzzy matching.
     """
     return re.sub(r"[\W_]+", "", name.casefold(), flags=re.UNICODE)
+
+
+def _resolve_by_normalized_name(
+    model_manager: Any,
+    raw_name: str,
+    *,
+    defaults: dict[str, Any] | None = None,
+    extra_create_kwargs: dict[str, Any] | None = None,
+) -> tuple[Any, bool]:
+    """Find or create a DB record by comparing normalized names in Python.
+
+    The DB stores raw, human-readable names (e.g. ``"Texas Instruments"``).
+    ``name__iexact`` only does case-insensitive matching — it cannot bridge
+    whitespace/punctuation differences.  This helper loads candidate records
+    and compares their normalized forms so that ``"Texas Instruments"`` and
+    ``"texasinstruments"`` resolve to the same record.
+
+    Returns ``(record, created)`` mirroring Django's ``get_or_create`` API.
+    """
+    target = normalize_name(raw_name)
+
+    for candidate in model_manager.all():
+        candidate_name = getattr(candidate, "name", "")
+        if normalize_name(candidate_name) == target:
+            return candidate, False
+
+    create_kwargs: dict[str, Any] = {"name": raw_name.strip()}
+    if defaults:
+        create_kwargs.update(defaults)
+    if extra_create_kwargs:
+        create_kwargs.update(extra_create_kwargs)
+    record = model_manager.create(**create_kwargs)
+    return record, True
+
+
+def _find_by_normalized_name(model_manager: Any, raw_name: str) -> Any | None:
+    """Look up a DB record by normalized name without creating one.
+
+    Returns the matching record or ``None``.
+    """
+    target = normalize_name(raw_name)
+    for candidate in model_manager.all():
+        candidate_name = getattr(candidate, "name", "")
+        if normalize_name(candidate_name) == target:
+            return candidate
+    return None
 
 
 def _save_param_with_user(instance: Any, user: Any, update_fields: list[str]) -> None:
@@ -254,9 +302,10 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
             return None
         from company.models import Company, ManufacturerPart
 
-        manufacturer, _ = Company.objects.get_or_create(
-            name__iexact=normalize_name(data.manufacturer_name),
-            defaults={"name": data.manufacturer_name.strip(), "is_manufacturer": True},
+        manufacturer, _ = _resolve_by_normalized_name(
+            Company.objects,
+            data.manufacturer_name,
+            defaults={"is_manufacturer": True},
         )
         mfr_part, _ = ManufacturerPart.objects.get_or_create(
             part=part,
@@ -522,16 +571,18 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
         for param in fresh.parameters:
             try:
                 if dry_run:
-                    template = parameter_template_model.objects.filter(
-                        name__iexact=normalize_name(param.name)
-                    ).first()
+                    template = _find_by_normalized_name(
+                        parameter_template_model.objects,
+                        param.name,
+                    )
                     if template is None:
                         updated.append(f"parameter:{param.name}")
                         continue
                 else:
-                    template, _ = parameter_template_model.objects.get_or_create(
-                        name__iexact=normalize_name(param.name),
-                        defaults={"name": param.name.strip(), "units": param.units},
+                    template, _ = _resolve_by_normalized_name(
+                        parameter_template_model.objects,
+                        param.name,
+                        defaults={"units": param.units},
                     )
 
                 parameter_kwargs = _parameter_filter_kwargs(part, template, content_type_model)

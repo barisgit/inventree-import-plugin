@@ -183,16 +183,20 @@ class _AttachmentManager:
 
 class _TemplateManager:
     def __init__(self, templates: list[_Template] | None = None):
-        self.templates: dict[str, _Template] = {}
-        for template in templates or []:
-            key = normalize_name(template.name)
-            self.templates[key] = template
+        self.templates: list[_Template] = list(templates or [])
+
+    def all(self):
+        return list(self.templates)
 
     def filter(self, **kwargs):
         name = kwargs.get("name") or kwargs.get("name__iexact")
         key = normalize_name(name) if isinstance(name, str) else ""
-        template = self.templates.get(key)
-        return _Query([] if template is None else [template])
+        match = None
+        for t in self.templates:
+            if normalize_name(t.name) == key:
+                match = t
+                break
+        return _Query([] if match is None else [match])
 
     def get_or_create(
         self,
@@ -204,13 +208,18 @@ class _TemplateManager:
     ):
         lookup = name__iexact if name__iexact is not None else name
         key = normalize_name(lookup) if lookup else ""
-        template = self.templates.get(key)
-        if template is not None:
-            return template, False
+        for t in self.templates:
+            if normalize_name(t.name) == key:
+                return t, False
         display_name = (defaults or {}).get("name", name or lookup or "")
         template = _Template(name=display_name, units=(defaults or {}).get("units", ""))
-        self.templates[key] = template
+        self.templates.append(template)
         return template, True
+
+    def create(self, **kwargs):
+        template = _Template(name=kwargs["name"], units=kwargs.get("units", ""))
+        self.templates.append(template)
+        return template
 
 
 class _ParamManager:
@@ -256,21 +265,30 @@ class _CompanyRecord:
 
 class _CompanyManager:
     def __init__(self, companies: list[_CompanyRecord] | None = None):
-        self.companies: dict[str, _CompanyRecord] = {}
-        for c in companies or []:
-            self.companies[normalize_name(c.name)] = c
+        self.companies: list[_CompanyRecord] = list(companies or [])
+
+    def all(self):
+        return list(self.companies)
 
     def get_or_create(self, *, name__iexact: str = "", defaults: dict | None = None, **_kwargs):
         key = normalize_name(name__iexact)
-        company = self.companies.get(key)
-        if company is not None:
-            return company, False
+        for c in self.companies:
+            if normalize_name(c.name) == key:
+                return c, False
         name = (defaults or {}).get("name", name__iexact)
         company = _CompanyRecord(
             name=name, is_manufacturer=(defaults or {}).get("is_manufacturer", True)
         )
-        self.companies[key] = company
+        self.companies.append(company)
         return company, True
+
+    def create(self, **kwargs):
+        company = _CompanyRecord(
+            name=kwargs["name"],
+            is_manufacturer=kwargs.get("is_manufacturer", True),
+        )
+        self.companies.append(company)
+        return company
 
 
 class _ManufacturerPartRecord:
@@ -1360,3 +1378,94 @@ class TestUserAttribution:
 
         assert "supplier_parameter:Voltage" in result["updated"]
         assert supplier_param.updated_by is test_user
+
+
+class TestCompanyNormalizationRawStoredRegression:
+    """Regression: raw-stored DB names must be matched by normalized lookup.
+
+    The DB stores raw display names like ``"Texas Instruments"``.  The old code did
+    ``name__iexact=normalize_name("Texas Instruments")`` which becomes
+    ``name__iexact="texasinstruments"`` — that never matches the raw
+    ``"Texas Instruments"`` in the DB.  The new helpers iterate all records and
+    compare normalized forms in Python.
+    """
+
+    def test_service_finds_raw_stored_company(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        supplier_part = _make_supplier_part()
+        supplier_part.manufacturer_part = None
+        result, harness = _run_service(
+            monkeypatch,
+            runtime,
+            supplier_part=supplier_part,
+            fresh=_make_fresh(
+                manufacturer_name="Texas-Instruments",
+                manufacturer_part_number="LM358",
+            ),
+        )
+
+        assert "manufacturer_part:link" in result["updated"]
+        assert len(harness.company_manager.companies) == 1
+        assert harness.company_manager.companies[0].name == "Texas-Instruments"
+
+    def test_base_finds_raw_stored_company(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        supplier_part = _make_supplier_part()
+        supplier_part.manufacturer_part = None
+        # Pre-create a company with a raw display name
+        harness = _install_backend(
+            monkeypatch,
+            runtime,
+            supplier_part=supplier_part,
+        )
+        harness.company_manager.companies.append(
+            _CompanyRecord(name="Texas Instruments", is_manufacturer=True)
+        )
+        plugin = _BasePlugin(
+            _make_fresh(
+                manufacturer_name="texasinstruments",
+                manufacturer_part_number="LM358",
+            )
+        )
+        result = plugin._enrich_part(
+            harness.part.pk,
+            dry_run=False,
+        )
+
+        assert "manufacturer_part:link" in result["updated"]
+        assert len(harness.company_manager.companies) == 1
+
+    def test_service_finds_raw_stored_template(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        # Pre-create a template with a unmatched raw name
+        template = _Template("Forward Voltage (V)", "V")
+        result, harness = _run_service(
+            monkeypatch,
+            runtime,
+            fresh=_make_fresh(
+                parameters=[PartParameter(name="forward voltage (V)", value="5V", units="V")]
+            ),
+            templates=[template],
+        )
+
+        assert "parameter:forward voltage (V)" in result["updated"]
+        assert len(harness.template_manager.templates) == 1
+
+    def test_base_finds_raw_stored_template(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        template = _Template("Forward Voltage (V)", "V")
+        result, harness = _run_base(
+            monkeypatch,
+            runtime,
+            fresh=_make_fresh(
+                parameters=[PartParameter(name="forward voltage (V)", value="5V", units="V")]
+            ),
+            templates=[template],
+        )
+
+        assert "parameter:forward voltage (V)" in result["updated"]
+        assert len(harness.template_manager.templates) == 1

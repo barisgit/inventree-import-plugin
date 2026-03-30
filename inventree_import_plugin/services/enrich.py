@@ -7,8 +7,10 @@ from typing import Any, cast
 from inventree_import_plugin.base import (
     _create_param_with_user,
     _download_and_set_image,
+    _find_by_normalized_name,
     _get_parameter_model_dependencies,
     _parameter_filter_kwargs,
+    _resolve_by_normalized_name,
     _save_param_with_user,
     normalize_name,
     supplier_part_defaults,
@@ -321,9 +323,7 @@ def _build_diff(
     # Parameter rows — update-on-change
     parameter_rows: list[dict[str, Any]] = []
     for param in fresh.parameters:
-        template = parameter_template_model.objects.filter(
-            name__iexact=normalize_name(param.name)
-        ).first()
+        template = _find_by_normalized_name(parameter_template_model.objects, param.name)
         current_value = None
         exists = False
         if template is not None:
@@ -546,12 +546,10 @@ def enrich_part_for_provider(
                 try:
                     from company.models import Company, ManufacturerPart
 
-                    manufacturer, _ = Company.objects.get_or_create(
-                        name__iexact=normalize_name(fresh.manufacturer_name),
-                        defaults={
-                            "name": fresh.manufacturer_name.strip(),
-                            "is_manufacturer": True,
-                        },
+                    manufacturer, _ = _resolve_by_normalized_name(
+                        Company.objects,
+                        fresh.manufacturer_name,
+                        defaults={"is_manufacturer": True},
                     )
                     mfr_part, _ = ManufacturerPart.objects.get_or_create(
                         part=part,
@@ -692,9 +690,9 @@ def enrich_part_for_provider(
             key = f"parameter:{param.name}"
             try:
                 if dry_run:
-                    template = parameter_template_model.objects.filter(
-                        name__iexact=normalize_name(param.name)
-                    ).first()
+                    template = _find_by_normalized_name(
+                        parameter_template_model.objects, param.name
+                    )
                     if template is None:
                         updated.append(key)
                         continue
@@ -708,9 +706,10 @@ def enrich_part_for_provider(
                         if content_type_model is not None:
                             skipped.append(f"supplier_parameter:{param.name}")
                         continue
-                    template, _ = parameter_template_model.objects.get_or_create(
-                        name__iexact=normalize_name(param.name),
-                        defaults={"name": param.name.strip(), "units": param.units},
+                    template, _ = _resolve_by_normalized_name(
+                        parameter_template_model.objects,
+                        param.name,
+                        defaults={"units": param.units},
                     )
 
                 parameter_kwargs = _parameter_filter_kwargs(part, template, content_type_model)
