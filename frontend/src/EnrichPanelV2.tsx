@@ -168,6 +168,8 @@ type SelectionProps = {
   selectable?: boolean;
   selectedKeys?: Set<string>;
   onToggleKey?: (key: string) => void;
+  sectionUpdateKeys?: string[];
+  onToggleAllInSection?: (keys: string[], allSelected: boolean) => void;
 };
 
 const STATUS_COLOR: Record<ItemStatus, string> = {
@@ -354,6 +356,10 @@ function hasAnyContent(result: EnrichResult): boolean {
   return result.updated.length > 0 || result.skipped.length > 0 || result.errors.length > 0;
 }
 
+function updateKeysFromItems(items: readonly ParsedItem[]): string[] {
+  return items.filter((i) => i.status === 'update').map((i) => i.key);
+}
+
 type PreviewSections = {
   assetItems: RichAssetItem[];
   partFieldItems: RichPartFieldItem[];
@@ -432,9 +438,30 @@ function StatusBadge({ status }: { status: ItemStatus }) {
   );
 }
 
-function SectionHeader({ label, count }: { label: string; count: number }) {
+function SectionHeader({ label, count, selectable, sectionUpdateKeys, selectedKeys, onToggleAllInSection }: {
+  label: string;
+  count: number;
+  selectable?: boolean;
+  sectionUpdateKeys?: string[];
+  selectedKeys?: Set<string>;
+  onToggleAllInSection?: (keys: string[], allSelected: boolean) => void;
+}) {
+  const allSelected = sectionUpdateKeys != null && sectionUpdateKeys.length > 0 &&
+    sectionUpdateKeys.every((k) => selectedKeys?.has(k));
+  const someSelected = sectionUpdateKeys != null && sectionUpdateKeys.length > 0 &&
+    !allSelected && sectionUpdateKeys.some((k) => selectedKeys?.has(k));
+
   return (
     <Group gap="xs">
+      {selectable && sectionUpdateKeys != null && sectionUpdateKeys.length > 0 && (
+        <Checkbox
+          size="xs"
+          checked={allSelected}
+          indeterminate={someSelected}
+          onChange={() => onToggleAllInSection?.(sectionUpdateKeys, allSelected)}
+          aria-label={`Select all ${label.toLowerCase()}`}
+        />
+      )}
       <Text size="sm" fw={700} tt="uppercase" c="dimmed" style={{ letterSpacing: '0.04em' }}>
         {label}
       </Text>
@@ -473,14 +500,15 @@ function DiffValue({ value, side }: { value: string | null; side: 'current' | 'i
   return <Text size="xs" c={color} style={{ wordBreak: 'break-word' }}>{display}</Text>;
 }
 
-function AssetRows({ items, selectable, selectedKeys, onToggleKey }: {
+function AssetRows({ items, selectable, selectedKeys, onToggleKey, sectionUpdateKeys, onToggleAllInSection }: {
   items: RichAssetItem[];
 } & SelectionProps) {
   if (items.length === 0) return null;
   const hasRichData = items.some((i) => i.currentValue !== null || i.incomingValue !== null);
+  const effectiveUpdateKeys = sectionUpdateKeys ?? updateKeysFromItems(items);
   return (
     <Stack gap={4}>
-      <SectionHeader label="Assets" count={items.length} />
+      <SectionHeader label="Assets" count={items.length} selectable={selectable} sectionUpdateKeys={effectiveUpdateKeys} selectedKeys={selectedKeys} onToggleAllInSection={onToggleAllInSection} />
       <Paper withBorder radius="sm" p="xs">
         <Stack gap={6}>
           {items.map((item) => (
@@ -514,7 +542,7 @@ function AssetRows({ items, selectable, selectedKeys, onToggleKey }: {
   );
 }
 
-function ParameterRows({ items, selectable, selectedKeys, onToggleKey }: {
+function ParameterRows({ items, selectable, selectedKeys, onToggleKey, sectionUpdateKeys, onToggleAllInSection }: {
   items: RichParameterItem[];
 } & SelectionProps) {
   if (items.length === 0) return null;
@@ -522,9 +550,10 @@ function ParameterRows({ items, selectable, selectedKeys, onToggleKey }: {
   const updates = items.filter((i) => i.status === 'update');
   const skips = items.filter((i) => i.status === 'skip');
   const sorted = [...updates, ...skips];
+  const effectiveUpdateKeys = sectionUpdateKeys ?? updateKeysFromItems(items);
   return (
     <Stack gap={4}>
-      <SectionHeader label="Parameters" count={items.length} />
+      <SectionHeader label="Parameters" count={items.length} selectable={selectable} sectionUpdateKeys={effectiveUpdateKeys} selectedKeys={selectedKeys} onToggleAllInSection={onToggleAllInSection} />
       <Table withTableBorder withColumnBorders verticalSpacing={4} horizontalSpacing="sm">
         <Table.Thead>
           <Table.Tr>
@@ -574,7 +603,7 @@ function ParameterRows({ items, selectable, selectedKeys, onToggleKey }: {
   );
 }
 
-function PriceBreakRows({ items, selectable, selectedKeys, onToggleKey }: {
+function PriceBreakRows({ items, selectable, selectedKeys, onToggleKey, sectionUpdateKeys, onToggleAllInSection }: {
   items: RichPriceBreakItem[];
 } & SelectionProps) {
   if (items.length === 0) return null;
@@ -582,9 +611,10 @@ function PriceBreakRows({ items, selectable, selectedKeys, onToggleKey }: {
   const updates = items.filter((i) => i.status === 'update');
   const skips = items.filter((i) => i.status === 'skip');
   const sorted = [...updates, ...skips];
+  const effectiveUpdateKeys = sectionUpdateKeys ?? updateKeysFromItems(items);
   return (
     <Stack gap={4}>
-      <SectionHeader label="Price Breaks" count={items.length} />
+      <SectionHeader label="Price Breaks" count={items.length} selectable={selectable} sectionUpdateKeys={effectiveUpdateKeys} selectedKeys={selectedKeys} onToggleAllInSection={onToggleAllInSection} />
       <Table withTableBorder withColumnBorders verticalSpacing={4} horizontalSpacing="sm">
         <Table.Thead>
           <Table.Tr>
@@ -645,7 +675,7 @@ function PriceBreakRows({ items, selectable, selectedKeys, onToggleKey }: {
   );
 }
 
-function PartFieldRows({ items, selectable, selectedKeys, onToggleKey }: {
+function PartFieldRows({ items, selectable, selectedKeys, onToggleKey, sectionUpdateKeys, onToggleAllInSection }: {
   items: RichPartFieldItem[];
 } & SelectionProps) {
   if (items.length === 0) return null;
@@ -653,9 +683,10 @@ function PartFieldRows({ items, selectable, selectedKeys, onToggleKey }: {
   const updates = items.filter((i) => i.status === 'update');
   const skips = items.filter((i) => i.status === 'skip');
   const sorted = [...updates, ...skips];
+  const effectiveUpdateKeys = sectionUpdateKeys ?? updateKeysFromItems(items);
   return (
     <Stack gap={4}>
-      <SectionHeader label="Part Fields" count={items.length} />
+      <SectionHeader label="Part Fields" count={items.length} selectable={selectable} sectionUpdateKeys={effectiveUpdateKeys} selectedKeys={selectedKeys} onToggleAllInSection={onToggleAllInSection} />
       <Table withTableBorder withColumnBorders verticalSpacing={4} horizontalSpacing="sm">
         <Table.Thead>
           <Table.Tr>
@@ -700,7 +731,7 @@ function PartFieldRows({ items, selectable, selectedKeys, onToggleKey }: {
   );
 }
 
-function SupplierPartRows({ items, selectable, selectedKeys, onToggleKey }: {
+function SupplierPartRows({ items, selectable, selectedKeys, onToggleKey, sectionUpdateKeys, onToggleAllInSection }: {
   items: RichSupplierPartItem[];
 } & SelectionProps) {
   if (items.length === 0) return null;
@@ -708,9 +739,10 @@ function SupplierPartRows({ items, selectable, selectedKeys, onToggleKey }: {
   const updates = items.filter((i) => i.status === 'update');
   const skips = items.filter((i) => i.status === 'skip');
   const sorted = [...updates, ...skips];
+  const effectiveUpdateKeys = sectionUpdateKeys ?? updateKeysFromItems(items);
   return (
     <Stack gap={4}>
-      <SectionHeader label="Supplier Part" count={items.length} />
+      <SectionHeader label="Supplier Part" count={items.length} selectable={selectable} sectionUpdateKeys={effectiveUpdateKeys} selectedKeys={selectedKeys} onToggleAllInSection={onToggleAllInSection} />
       <Table withTableBorder withColumnBorders verticalSpacing={4} horizontalSpacing="sm">
         <Table.Thead>
           <Table.Tr>
@@ -806,10 +838,14 @@ function BulkStructuredPreview({
   result,
   selectedKeys,
   onToggleKey,
+  onToggleAllInSection,
+  onToggleAllForResult,
 }: {
   result: EnrichResult;
   selectedKeys: Set<string>;
   onToggleKey: (key: string) => void;
+  onToggleAllInSection?: (keys: string[], allSelected: boolean) => void;
+  onToggleAllForResult?: (allSelected: boolean) => void;
 }) {
   const sections = useMemo(() => buildPreviewSections(result), [result]);
 
@@ -819,6 +855,19 @@ function BulkStructuredPreview({
 
   const { updateCount, skipCount } = countPreviewStatuses(sections);
   const errorCount = result.errors.length;
+
+  const allUpdateKeys = getSelectableResultKeys(result);
+  const allResultSelected = allUpdateKeys.size > 0 && Array.from(allUpdateKeys).every((k) => selectedKeys.has(k));
+  const someResultSelected = !allResultSelected && Array.from(allUpdateKeys).some((k) => selectedKeys.has(k));
+
+  const handleSectionToggle = (keys: string[], allSelected: boolean) => {
+    onToggleAllInSection
+      ? onToggleAllInSection(keys, allSelected)
+      : keys.forEach((k) => {
+          if (allSelected) onToggleKey(k);
+          else if (!selectedKeys.has(k)) onToggleKey(k);
+        });
+  };
 
   return (
     <Stack gap="md">
@@ -834,15 +883,24 @@ function BulkStructuredPreview({
             {errorCount} {errorCount === 1 ? 'warning' : 'warnings'}
           </Badge>
         )}
+        {onToggleAllForResult && allUpdateKeys.size > 0 && (
+          <Checkbox
+            size="xs"
+            label="Select all"
+            checked={allResultSelected}
+            indeterminate={someResultSelected}
+            onChange={() => onToggleAllForResult(allResultSelected)}
+          />
+        )}
       </Group>
 
       <Divider />
 
-      <AssetRows items={sections.assetItems} selectable selectedKeys={selectedKeys} onToggleKey={onToggleKey} />
-      <PartFieldRows items={sections.partFieldItems} selectable selectedKeys={selectedKeys} onToggleKey={onToggleKey} />
-      <SupplierPartRows items={sections.supplierPartItems} selectable selectedKeys={selectedKeys} onToggleKey={onToggleKey} />
-      <ParameterRows items={sections.parameterItems} selectable selectedKeys={selectedKeys} onToggleKey={onToggleKey} />
-      <PriceBreakRows items={sections.priceBreakItems} selectable selectedKeys={selectedKeys} onToggleKey={onToggleKey} />
+      <AssetRows items={sections.assetItems} selectable selectedKeys={selectedKeys} onToggleKey={onToggleKey} sectionUpdateKeys={updateKeysFromItems(sections.assetItems)} onToggleAllInSection={handleSectionToggle} />
+      <PartFieldRows items={sections.partFieldItems} selectable selectedKeys={selectedKeys} onToggleKey={onToggleKey} sectionUpdateKeys={updateKeysFromItems(sections.partFieldItems)} onToggleAllInSection={handleSectionToggle} />
+      <SupplierPartRows items={sections.supplierPartItems} selectable selectedKeys={selectedKeys} onToggleKey={onToggleKey} sectionUpdateKeys={updateKeysFromItems(sections.supplierPartItems)} onToggleAllInSection={handleSectionToggle} />
+      <ParameterRows items={sections.parameterItems} selectable selectedKeys={selectedKeys} onToggleKey={onToggleKey} sectionUpdateKeys={updateKeysFromItems(sections.parameterItems)} onToggleAllInSection={handleSectionToggle} />
+      <PriceBreakRows items={sections.priceBreakItems} selectable selectedKeys={selectedKeys} onToggleKey={onToggleKey} sectionUpdateKeys={updateKeysFromItems(sections.priceBreakItems)} onToggleAllInSection={handleSectionToggle} />
     </Stack>
   );
 }
@@ -1155,6 +1213,44 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
     });
   }, []);
 
+  /* -- per-result-card select-all -- */
+  const toggleAllForBulkResult = useCallback((resultKey: string, allSelected: boolean) => {
+    setBulkSelectedKeys((prev) => {
+      const next = { ...prev };
+      if (allSelected) {
+        next[resultKey] = new Set();
+      } else {
+        const result = bulkResult?.results.find(
+          (r) => `${r.part_id}-${r.provider_slug}` === resultKey
+        );
+        next[resultKey] = result ? getSelectableResultKeys(result) : new Set();
+      }
+      return next;
+    });
+  }, [bulkResult]);
+
+  /* -- per-section select-all (within a result card) -- */
+  const toggleSectionKeys = useCallback((resultKey: string, keys: string[], allSelected: boolean) => {
+    setBulkSelectedKeys((prev) => {
+      const next = { ...prev };
+      const current = new Set(next[resultKey] ?? new Set());
+      if (allSelected) {
+        keys.forEach((k) => current.delete(k));
+      } else {
+        keys.forEach((k) => current.add(k));
+      }
+      next[resultKey] = current;
+      return next;
+    });
+  }, []);
+
+  /* -- part identity lookup -- */
+  const partsById = useMemo(() => {
+    const map = new Map<number, CategoryPart>();
+    for (const part of parts) map.set(part.pk, part);
+    return map;
+  }, [parts]);
+
   /* -- bulk operations -- */
   const canOperate = selectedPartIds.size > 0 && selectedProviderSlugs.length > 0;
 
@@ -1406,6 +1502,7 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
                 {bulkResult.results.map((result) => {
                   const resultKey = `${result.part_id}-${result.provider_slug}`;
                   const selectedKeys = bulkSelectedKeys[resultKey] ?? new Set<string>();
+                  const partInfo = partsById.get(result.part_id);
                   return (
                     <Card
                       key={resultKey}
@@ -1414,14 +1511,29 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
                       padding="md"
                     >
                       <Group gap="xs" mb={4}>
-                        <Text size="sm" fw={600}>Part #{result.part_id}</Text>
+                        <Text size="sm" fw={600}>
+                          {partInfo ? partInfo.name : `Part #${result.part_id}`}
+                        </Text>
+                        {partInfo?.IPN && (
+                          <Text size="xs" c="dimmed">({partInfo.IPN})</Text>
+                        )}
+                        <Text size="xs" c="dimmed">#{result.part_id}</Text>
                         <Badge size="sm" variant="dot">{result.provider_name}</Badge>
+                        {partInfo?.description && (
+                          <Tooltip label={partInfo.description} openDelay={400} maw={400}>
+                            <Text size="xs" c="dimmed" truncate="end" maw={260} fs="italic">
+                              {partInfo.description}
+                            </Text>
+                          </Tooltip>
+                        )}
                       </Group>
                       {bulkMode === 'preview' ? (
                         <BulkStructuredPreview
                           result={result}
                           selectedKeys={selectedKeys}
                           onToggleKey={(key) => toggleBulkKey(resultKey, key)}
+                          onToggleAllInSection={(keys, allSel) => toggleSectionKeys(resultKey, keys, allSel)}
+                          onToggleAllForResult={(allSel) => toggleAllForBulkResult(resultKey, allSel)}
                         />
                       ) : (
                         <StructuredPreview result={result} />
