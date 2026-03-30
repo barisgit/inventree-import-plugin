@@ -28,8 +28,16 @@ def _make_company_stubs() -> dict[str, types.ModuleType]:
     class SupplierPriceBreak:
         objects = _QuerySet()
 
+    class Company:
+        objects = _QuerySet()
+
+    class ManufacturerPart:
+        objects = _QuerySet()
+
     models_mod.SupplierPart = SupplierPart  # type: ignore[attr-defined]
     models_mod.SupplierPriceBreak = SupplierPriceBreak  # type: ignore[attr-defined]
+    models_mod.Company = Company  # type: ignore[attr-defined]
+    models_mod.ManufacturerPart = ManufacturerPart  # type: ignore[attr-defined]
     company_mod.models = models_mod  # type: ignore[attr-defined]
 
     return {"company": company_mod, "company.models": models_mod}

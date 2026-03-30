@@ -73,6 +73,13 @@ type DiffPriceBreakRow = {
   status: 'new' | 'skipped' | 'updated';
 };
 
+type DiffManufacturerPartRow = {
+  field: string;
+  current: string | number | null;
+  incoming: string | number | null;
+  status: 'new' | 'skipped' | 'updated';
+};
+
 type DiffPayload = {
   image: DiffFieldEntry | null;
   datasheet: DiffFieldEntry | null;
@@ -80,6 +87,7 @@ type DiffPayload = {
   parameters: DiffParameterRow[];
   part_fields: DiffFieldEntry[];
   supplier_part: DiffSupplierPartRow[];
+  manufacturer_part: DiffManufacturerPartRow[];
 };
 
 type EnrichResult = {
@@ -162,6 +170,7 @@ type ParsedSections = {
   parameters: ParsedItem[];
   priceBreaks: ParsedItem[];
   supplierParts: ParsedItem[];
+  manufacturerParts: ParsedItem[];
 };
 
 type SelectionProps = {
@@ -225,6 +234,10 @@ function classifyKey(raw: string): { section: keyof ParsedSections; label: strin
     const name = raw.slice('supplier_parameter:'.length);
     return { section: 'parameters', label: `Supplier: ${name}` };
   }
+  if (raw.startsWith('manufacturer_part:')) {
+    const field = raw.slice('manufacturer_part:'.length);
+    return { section: 'manufacturerParts', label: `Manufacturer: ${field}` };
+  }
   return { section: 'assets', label: raw };
 }
 
@@ -235,6 +248,7 @@ function parseResultKeys(result: EnrichResult): ParsedSections {
     parameters: [],
     priceBreaks: [],
     supplierParts: [],
+    manufacturerParts: [],
   };
 
   for (const key of result.updated) {
@@ -352,6 +366,21 @@ function buildSupplierPartItems(result: EnrichResult): RichSupplierPartItem[] {
   }));
 }
 
+function buildManufacturerPartItems(result: EnrichResult): RichSupplierPartItem[] {
+  const diff = result.diff;
+  if (!diff) {
+    const sections = parseResultKeys(result);
+    return sections.manufacturerParts.map((item) => ({ ...item, currentValue: null, incomingValue: null }));
+  }
+  return diff.manufacturer_part.map((row) => ({
+    key: `manufacturer_part:${row.field}`,
+    label: row.field === 'manufacturer_name' ? 'Manufacturer' : 'MPN',
+    status: authoritativeStatus(`manufacturer_part:${row.field}`, result),
+    currentValue: row.current != null ? String(row.current) : null,
+    incomingValue: row.incoming != null ? String(row.incoming) : null,
+  }));
+}
+
 function hasAnyContent(result: EnrichResult): boolean {
   return result.updated.length > 0 || result.skipped.length > 0 || result.errors.length > 0;
 }
@@ -366,6 +395,7 @@ type PreviewSections = {
   parameterItems: RichParameterItem[];
   priceBreakItems: RichPriceBreakItem[];
   supplierPartItems: RichSupplierPartItem[];
+  manufacturerPartItems: RichSupplierPartItem[];
 };
 
 function buildPreviewSections(result: EnrichResult): PreviewSections {
@@ -375,6 +405,7 @@ function buildPreviewSections(result: EnrichResult): PreviewSections {
     parameterItems: buildParameterItems(result),
     priceBreakItems: buildPriceBreakItems(result),
     supplierPartItems: buildSupplierPartItems(result),
+    manufacturerPartItems: buildManufacturerPartItems(result),
   };
 }
 
@@ -385,6 +416,7 @@ function countPreviewStatuses(sections: PreviewSections): { updateCount: number;
     ...sections.parameterItems,
     ...sections.priceBreakItems,
     ...sections.supplierPartItems,
+    ...sections.manufacturerPartItems,
   ];
 
   return {
@@ -402,6 +434,7 @@ function getSelectableResultKeys(result: EnrichResult): Set<string> {
       ...sections.parameterItems,
       ...sections.priceBreakItems,
       ...sections.supplierPartItems,
+      ...sections.manufacturerPartItems,
     ]
       .filter((item) => item.status === 'update')
       .map((item) => item.key)
@@ -787,6 +820,62 @@ function SupplierPartRows({ items, selectable, selectedKeys, onToggleKey, sectio
   );
 }
 
+function ManufacturerPartRows({ items, selectable, selectedKeys, onToggleKey, sectionUpdateKeys, onToggleAllInSection }: {
+  items: RichSupplierPartItem[];
+} & SelectionProps) {
+  if (items.length === 0) return null;
+  const hasRichData = items.some((i) => i.currentValue !== null || i.incomingValue !== null);
+  const updates = items.filter((i) => i.status === 'update');
+  const skips = items.filter((i) => i.status === 'skip');
+  const sorted = [...updates, ...skips];
+  const effectiveUpdateKeys = sectionUpdateKeys ?? updateKeysFromItems(items);
+  return (
+    <Stack gap={4}>
+      <SectionHeader label="Manufacturer Part" count={items.length} selectable={selectable} sectionUpdateKeys={effectiveUpdateKeys} selectedKeys={selectedKeys} onToggleAllInSection={onToggleAllInSection} />
+      <Table withTableBorder withColumnBorders verticalSpacing={4} horizontalSpacing="sm">
+        <Table.Thead>
+          <Table.Tr>
+            {selectable && <Table.Th w={40} />}
+            <Table.Th><Text size="xs" fw={600}>Field</Text></Table.Th>
+            {hasRichData && <Table.Th><Text size="xs" fw={600}>Current</Text></Table.Th>}
+            {hasRichData && <Table.Th><Text size="xs" fw={600}>Incoming</Text></Table.Th>}
+            <Table.Th w={100}><Text size="xs" fw={600}>Status</Text></Table.Th>
+          </Table.Tr>
+        </Table.Thead>
+        <Table.Tbody>
+          {sorted.map((item) => (
+            <Table.Tr
+              key={item.key}
+              bg={item.status === 'update' ? 'var(--mantine-color-green-light)' : undefined}
+            >
+              {selectable && (
+                <Table.Td>
+                  {item.status === 'update' && (
+                    <Checkbox
+                      checked={selectedKeys?.has(item.key) ?? false}
+                      onChange={() => onToggleKey?.(item.key)}
+                      size="xs"
+                      aria-label={`Select ${item.label}`}
+                    />
+                  )}
+                </Table.Td>
+              )}
+              <Table.Td><Text size="sm">{item.label}</Text></Table.Td>
+              {hasRichData && (
+                <Table.Td><DiffValue value={item.currentValue} side="current" /></Table.Td>
+              )}
+              {hasRichData && (
+                <Table.Td><DiffValue value={item.incomingValue} side="incoming" /></Table.Td>
+              )}
+              <Table.Td><StatusBadge status={item.status} /></Table.Td>
+            </Table.Tr>
+          ))}
+        </Table.Tbody>
+      </Table>
+    </Stack>
+  );
+}
+
 function StructuredPreview({ result }: { result: EnrichResult }) {
   const sections = useMemo(() => buildPreviewSections(result), [result]);
 
@@ -827,6 +916,7 @@ function StructuredPreview({ result }: { result: EnrichResult }) {
       <AssetRows items={sections.assetItems} />
       <PartFieldRows items={sections.partFieldItems} />
       <SupplierPartRows items={sections.supplierPartItems} />
+      <ManufacturerPartRows items={sections.manufacturerPartItems} />
       <ParameterRows items={sections.parameterItems} />
       <PriceBreakRows items={sections.priceBreakItems} />
     </Stack>
@@ -899,6 +989,7 @@ function BulkStructuredPreview({
       <AssetRows items={sections.assetItems} selectable selectedKeys={selectedKeys} onToggleKey={onToggleKey} sectionUpdateKeys={updateKeysFromItems(sections.assetItems)} onToggleAllInSection={handleSectionToggle} />
       <PartFieldRows items={sections.partFieldItems} selectable selectedKeys={selectedKeys} onToggleKey={onToggleKey} sectionUpdateKeys={updateKeysFromItems(sections.partFieldItems)} onToggleAllInSection={handleSectionToggle} />
       <SupplierPartRows items={sections.supplierPartItems} selectable selectedKeys={selectedKeys} onToggleKey={onToggleKey} sectionUpdateKeys={updateKeysFromItems(sections.supplierPartItems)} onToggleAllInSection={handleSectionToggle} />
+      <ManufacturerPartRows items={sections.manufacturerPartItems} selectable selectedKeys={selectedKeys} onToggleKey={onToggleKey} sectionUpdateKeys={updateKeysFromItems(sections.manufacturerPartItems)} onToggleAllInSection={handleSectionToggle} />
       <ParameterRows items={sections.parameterItems} selectable selectedKeys={selectedKeys} onToggleKey={onToggleKey} sectionUpdateKeys={updateKeysFromItems(sections.parameterItems)} onToggleAllInSection={handleSectionToggle} />
       <PriceBreakRows items={sections.priceBreakItems} selectable selectedKeys={selectedKeys} onToggleKey={onToggleKey} sectionUpdateKeys={updateKeysFromItems(sections.priceBreakItems)} onToggleAllInSection={handleSectionToggle} />
     </Stack>

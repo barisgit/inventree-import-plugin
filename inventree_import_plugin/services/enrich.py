@@ -319,6 +319,32 @@ def _build_diff(
             }
         )
 
+    # Manufacturer part diff -- fill-missing
+    mfr_diff_rows: list[dict[str, Any]] = []
+    if supplier_part is not None:
+        existing_mfr = getattr(supplier_part, "manufacturer_part", None)
+        has_mfr_data = bool(
+            getattr(fresh, "manufacturer_name", "")
+            and getattr(fresh, "manufacturer_part_number", "")
+        )
+        if has_mfr_data and not existing_mfr:
+            mfr_diff_rows.append(
+                {
+                    "field": "manufacturer_name",
+                    "current": None,
+                    "incoming": fresh.manufacturer_name,
+                    "status": "new",
+                }
+            )
+            mfr_diff_rows.append(
+                {
+                    "field": "manufacturer_part_number",
+                    "current": None,
+                    "incoming": fresh.manufacturer_part_number,
+                    "status": "new",
+                }
+            )
+
     return {
         "image": image_diff,
         "datasheet": datasheet_diff,
@@ -326,6 +352,7 @@ def _build_diff(
         "parameters": parameter_rows,
         "part_fields": part_field_rows,
         "supplier_part": sp_diff_rows,
+        "manufacturer_part": mfr_diff_rows,
     }
 
 
@@ -475,6 +502,45 @@ def enrich_part_for_provider(
                 else:
                     supplier_part.available = available_quantity
                     supplier_part.save(update_fields=["available"])
+
+        # Manufacturer linkage -- fill-missing only
+        if (
+            not dry_run
+            and fresh.manufacturer_name
+            and fresh.manufacturer_part_number
+            and not getattr(supplier_part, "manufacturer_part", None)
+        ):
+            if _key_allowed("manufacturer_part:link", selected_keys):
+                try:
+                    from company.models import Company, ManufacturerPart
+
+                    manufacturer, _ = Company.objects.get_or_create(
+                        name__iexact=fresh.manufacturer_name,
+                        defaults={
+                            "name": fresh.manufacturer_name,
+                            "is_manufacturer": True,
+                        },
+                    )
+                    mfr_part, _ = ManufacturerPart.objects.get_or_create(
+                        part=part,
+                        manufacturer=manufacturer,
+                        MPN=fresh.manufacturer_part_number,
+                    )
+                    supplier_part.manufacturer_part = mfr_part
+                    supplier_part.save(update_fields=["manufacturer_part"])
+                    updated.append("manufacturer_part:link")
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to link manufacturer part for part %s: %s",
+                        part_id,
+                        exc,
+                    )
+                    errors.append(f"manufacturer_part: {exc}")
+            else:
+                skipped.append("manufacturer_part:link")
+        elif dry_run and fresh.manufacturer_name and fresh.manufacturer_part_number:
+            if not getattr(supplier_part, "manufacturer_part", None):
+                updated.append("manufacturer_part:link")
 
         # Part description/link -- update when values differ
         _part_updates: dict[str, Any] = {}

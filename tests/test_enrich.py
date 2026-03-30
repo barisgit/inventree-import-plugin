@@ -233,6 +233,59 @@ class _ContentTypeModel:
     objects = _ContentTypeObjects()
 
 
+class _CompanyRecord:
+    def __init__(self, name: str, is_manufacturer: bool = True):
+        self.name = name
+        self.is_manufacturer = is_manufacturer
+        self.save = MagicMock()
+
+
+class _CompanyManager:
+    def __init__(self, companies: list[_CompanyRecord] | None = None):
+        self.companies = {c.name.lower(): c for c in companies or []}
+
+    def get_or_create(self, *, name__iexact: str = "", defaults: dict | None = None, **_kwargs):
+        key = name__iexact.lower()
+        company = self.companies.get(key)
+        if company is not None:
+            return company, False
+        name = (defaults or {}).get("name", name__iexact)
+        company = _CompanyRecord(
+            name=name, is_manufacturer=(defaults or {}).get("is_manufacturer", True)
+        )
+        self.companies[key] = company
+        return company, True
+
+
+class _ManufacturerPartRecord:
+    def __init__(self, part: object, manufacturer: _CompanyRecord, MPN: str):
+        self.part = part
+        self.manufacturer = manufacturer
+        self.MPN = MPN
+        self.save = MagicMock()
+
+
+class _ManufacturerPartManager:
+    def __init__(self, records: list[_ManufacturerPartRecord] | None = None):
+        self.records = list(records or [])
+
+    def get_or_create(
+        self,
+        *,
+        part: object,
+        manufacturer: _CompanyRecord,
+        MPN: str,
+        defaults: dict | None = None,
+        **_kwargs,
+    ):
+        for rec in self.records:
+            if rec.part is part and rec.manufacturer is manufacturer and rec.MPN == MPN:
+                return rec, False
+        rec = _ManufacturerPartRecord(part=part, manufacturer=manufacturer, MPN=MPN)
+        self.records.append(rec)
+        return rec, True
+
+
 @dataclass
 class _Harness:
     part: MagicMock
@@ -241,6 +294,8 @@ class _Harness:
     attachment_manager: _AttachmentManager
     template_manager: _TemplateManager
     parameter_manager: _ParamManager
+    company_manager: _CompanyManager
+    manufacturer_part_manager: _ManufacturerPartManager
     download_base: MagicMock
     download_service: MagicMock
 
@@ -371,6 +426,14 @@ def _install_backend(
     runtime.company_models.SupplierPriceBreak = SupplierPriceBreakModel
     runtime.common_models.Attachment = AttachmentModel
 
+    company_manager = _CompanyManager()
+    CompanyModel = type("Company", (), {"objects": company_manager})
+    runtime.company_models.Company = CompanyModel
+
+    manufacturer_part_manager = _ManufacturerPartManager()
+    ManufacturerPartModel = type("ManufacturerPart", (), {"objects": manufacturer_part_manager})
+    runtime.company_models.ManufacturerPart = ManufacturerPartModel
+
     deps = (ParameterModel, TemplateModel, _ContentTypeModel)
     monkeypatch.setattr(base_module, "_get_parameter_model_dependencies", lambda: deps)
     monkeypatch.setattr(enrich_module, "_get_parameter_model_dependencies", lambda: deps)
@@ -387,6 +450,8 @@ def _install_backend(
         attachment_manager=attachment_manager,
         template_manager=template_manager,
         parameter_manager=parameter_manager,
+        company_manager=company_manager,
+        manufacturer_part_manager=manufacturer_part_manager,
         download_base=download_base,
         download_service=download_service,
     )
@@ -830,3 +895,129 @@ class TestMoneyPriceBreakRegression:
 
         assert "price_break:1" in result["updated"]
         existing.save.assert_called_once_with(update_fields=["price", "price_currency"])
+
+
+class TestBaseManufacturerEnrich:
+    def test_manufacturer_linked_when_missing(self, monkeypatch, runtime):
+        supplier_part = _make_supplier_part()
+        supplier_part.manufacturer_part = None
+        result, harness = _run_base(
+            monkeypatch,
+            runtime,
+            supplier_part=supplier_part,
+        )
+
+        assert "manufacturer_part:link" in result["updated"]
+        assert harness.manufacturer_part_manager.records
+        mfr_part = harness.manufacturer_part_manager.records[0]
+        assert mfr_part.MPN == "LM358"
+        assert mfr_part.manufacturer.name == "TI"
+
+    def test_manufacturer_skipped_when_already_linked(self, monkeypatch, runtime):
+        supplier_part = _make_supplier_part()
+        supplier_part.manufacturer_part = MagicMock()
+        result, _ = _run_base(
+            monkeypatch,
+            runtime,
+            supplier_part=supplier_part,
+        )
+
+        assert "manufacturer_part:link" not in result["updated"]
+
+    def test_manufacturer_skipped_when_no_mfr_data(self, monkeypatch, runtime):
+        fresh = _make_fresh(manufacturer_name="", manufacturer_part_number="")
+        supplier_part = _make_supplier_part()
+        supplier_part.manufacturer_part = None
+        result, _ = _run_base(
+            monkeypatch,
+            runtime,
+            fresh=fresh,
+            supplier_part=supplier_part,
+        )
+
+        assert "manufacturer_part:link" not in result["updated"]
+
+    def test_manufacturer_dry_run_does_not_link(self, monkeypatch, runtime):
+        supplier_part = _make_supplier_part()
+        supplier_part.manufacturer_part = None
+        result, harness = _run_base(
+            monkeypatch,
+            runtime,
+            dry_run=True,
+            supplier_part=supplier_part,
+        )
+
+        assert "manufacturer_part:link" in result["updated"]
+        assert not harness.manufacturer_part_manager.records
+
+
+class TestServiceManufacturerEnrich:
+    def test_manufacturer_linked_when_missing(self, monkeypatch, runtime):
+        supplier_part = _make_supplier_part()
+        supplier_part.manufacturer_part = None
+        result, harness = _run_service(
+            monkeypatch,
+            runtime,
+            supplier_part=supplier_part,
+        )
+
+        assert "manufacturer_part:link" in result["updated"]
+        assert harness.manufacturer_part_manager.records
+        mfr_part = harness.manufacturer_part_manager.records[0]
+        assert mfr_part.MPN == "LM358"
+        assert mfr_part.manufacturer.name == "TI"
+
+    def test_manufacturer_skipped_when_already_linked(self, monkeypatch, runtime):
+        supplier_part = _make_supplier_part()
+        supplier_part.manufacturer_part = MagicMock()
+        result, _ = _run_service(
+            monkeypatch,
+            runtime,
+            supplier_part=supplier_part,
+        )
+
+        assert "manufacturer_part:link" not in result["updated"]
+
+    def test_manufacturer_skipped_by_selected_keys(self, monkeypatch, runtime):
+        supplier_part = _make_supplier_part()
+        supplier_part.manufacturer_part = None
+        result, _ = _run_service(
+            monkeypatch,
+            runtime,
+            supplier_part=supplier_part,
+            selected_keys={"part:description"},
+        )
+
+        assert "manufacturer_part:link" in result["skipped"]
+
+    def test_preview_diff_includes_manufacturer_part(self, monkeypatch, runtime):
+        supplier_part = _make_supplier_part()
+        supplier_part.manufacturer_part = None
+        result, _ = _run_service(
+            monkeypatch,
+            runtime,
+            dry_run=True,
+            supplier_part=supplier_part,
+        )
+
+        diff = result["diff"]
+        mfr_rows = diff["manufacturer_part"]
+        assert len(mfr_rows) == 2
+        fields = {row["field"]: row for row in mfr_rows}
+        assert fields["manufacturer_name"]["status"] == "new"
+        assert fields["manufacturer_name"]["incoming"] == "TI"
+        assert fields["manufacturer_part_number"]["status"] == "new"
+        assert fields["manufacturer_part_number"]["incoming"] == "LM358"
+
+    def test_preview_diff_empty_when_manufacturer_already_linked(self, monkeypatch, runtime):
+        supplier_part = _make_supplier_part()
+        supplier_part.manufacturer_part = MagicMock()
+        result, _ = _run_service(
+            monkeypatch,
+            runtime,
+            dry_run=True,
+            supplier_part=supplier_part,
+        )
+
+        diff = result["diff"]
+        assert diff["manufacturer_part"] == []

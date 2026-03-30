@@ -354,6 +354,27 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
                     supplier_part.available = available_quantity
                     supplier_part.save(update_fields=["available"])
 
+        # Manufacturer linkage — fill-missing only
+        if (
+            fresh.manufacturer_name
+            and fresh.manufacturer_part_number
+            and not getattr(supplier_part, "manufacturer_part", None)
+        ):
+            if dry_run:
+                updated.append("manufacturer_part:link")
+            else:
+                try:
+                    mfr_part = self.import_manufacturer_part(fresh, part=part)
+                    if mfr_part is not None:
+                        supplier_part.manufacturer_part = mfr_part
+                        supplier_part.save(update_fields=["manufacturer_part"])
+                        updated.append("manufacturer_part:link")
+                except Exception:
+                    logger.warning(
+                        "Failed to link manufacturer part for SKU %s",
+                        supplier_part.SKU,
+                    )
+
         # Part description/link — update when values differ
         _part_updates: dict[str, Any] = {}
         if fresh.description and getattr(part, "description", None) != fresh.description:
