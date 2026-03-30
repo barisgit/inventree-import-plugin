@@ -11,11 +11,13 @@ import {
   Group,
   Loader,
   Modal,
+  NativeSelect,
   Paper,
   ScrollArea,
   Stack,
   Table,
   Text,
+  TextInput,
   Title,
   Tooltip,
 } from '@mantine/core';
@@ -122,7 +124,19 @@ type CategoryPart = {
   name: string;
   IPN: string | null;
   description: string;
+  category_name?: string;
+  category_detail?: {
+    name?: string;
+    pathstring?: string;
+  } | null;
 };
+
+function normalizeCategoryPart(part: CategoryPart): CategoryPart {
+  return {
+    ...part,
+    category_name: part.category_name ?? part.category_detail?.pathstring ?? part.category_detail?.name ?? undefined,
+  };
+}
 
 /* ------------------------------------------------------------------ */
 /*  Key parsing & structured preview types                            */
@@ -1221,12 +1235,18 @@ function EnrichPanel({ context }: { context: InvenTreePluginContext }) {
 /*  Category bulk enrichment panel (partcategory page)                */
 /* ------------------------------------------------------------------ */
 
-const PARTS_PAGE_LIMIT = 500;
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 250] as const;
 
 function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
   const panelContext = (context.context ?? {}) as PanelContextData;
   const pluginSlug = panelContext.plugin_slug ?? '';
   const categoryId = Number(context.id ?? 0);
+
+  /* -- pagination state -- */
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(PAGE_SIZE_OPTIONS[1]);
+  const [search, setSearch] = useState('');
+  const [totalCount, setTotalCount] = useState(0);
 
   /* -- data state -- */
   const [parts, setParts] = useState<CategoryPart[]>([]);
@@ -1247,25 +1267,38 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
   const [bulkSelectedKeys, setBulkSelectedKeys] = useState<Record<string, Set<string>>>({});
   const [bulkError, setBulkError] = useState<string | null>(null);
 
-  /* -- fetch parts in category -- */
-  useEffect(() => {
-    if (!categoryId) {
-      setPartsError('No category ID available.');
-      setPartsLoading(false);
-      return;
-    }
+  /* -- whether we are in "all parts" mode (no category context) -- */
+  const allPartsMode = !categoryId;
 
+  const totalPages = totalCount > 0 ? Math.max(1, Math.ceil(totalCount / pageSize)) : 1;
+
+  /* -- fetch parts (paginated, with cascade or all-parts fallback) -- */
+  useEffect(() => {
     const run = async () => {
       setPartsLoading(true);
       setPartsError(null);
       try {
-        const response = await context.api.get<CategoryPart[]>('/api/part/', {
-          params: { category: categoryId, limit: PARTS_PAGE_LIMIT, offset: 0 },
-        });
-        const data = Array.isArray(response.data)
-          ? response.data
-          : (response.data as unknown as { results: CategoryPart[] }).results ?? [];
-        setParts(data);
+        const params: Record<string, string | number | boolean> = {
+          limit: pageSize,
+          offset: (page - 1) * pageSize,
+          category_detail: true,
+        };
+        if (categoryId) {
+          params.category = categoryId;
+          params.cascade = true;
+        }
+        if (search.trim()) {
+          params.search = search.trim();
+        }
+        const response = await context.api.get<unknown>('/api/part/', { params });
+        if (Array.isArray(response.data)) {
+          setParts((response.data as CategoryPart[]).map(normalizeCategoryPart));
+          setTotalCount(response.data.length);
+        } else {
+          const paginated = response.data as { results?: CategoryPart[]; count?: number };
+          setParts((paginated.results ?? []).map(normalizeCategoryPart));
+          setTotalCount(paginated.count ?? 0);
+        }
       } catch (err) {
         setPartsError(String(err));
       } finally {
@@ -1274,11 +1307,12 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
     };
 
     void run();
-  }, [context.api, categoryId]);
+  }, [context.api, categoryId, page, pageSize, search]);
 
   /* -- fetch available providers (use first part or a dedicated endpoint) -- */
+  const firstPartPk = parts.length > 0 ? parts[0].pk : null;
   useEffect(() => {
-    if (!pluginSlug || parts.length === 0) {
+    if (!pluginSlug || firstPartPk == null) {
       setProvidersLoading(false);
       return;
     }
@@ -1287,7 +1321,7 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
       setProvidersLoading(true);
       try {
         const response = await context.api.get<ProviderStateResponse>(
-          pluginApi(pluginSlug, `part/${parts[0].pk}/providers/`)
+          pluginApi(pluginSlug, `part/${firstPartPk}/providers/`)
         );
         setProviders(response.data.providers.filter((p) => p.enabled && p.configured));
       } catch {
@@ -1298,15 +1332,24 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
     };
 
     void run();
-  }, [context.api, pluginSlug, parts]);
+  }, [context.api, pluginSlug, firstPartPk]);
 
   /* -- row selection helpers -- */
-  const allSelected = parts.length > 0 && selectedPartIds.size === parts.length;
-  const someSelected = selectedPartIds.size > 0 && !allSelected;
+  const pagePartIds = useMemo(() => new Set(parts.map((p) => p.pk)), [parts]);
+  const allCurrentPageSelected = parts.length > 0 && parts.every((p) => selectedPartIds.has(p.pk));
+  const someCurrentPageSelected = parts.some((p) => selectedPartIds.has(p.pk)) && !allCurrentPageSelected;
 
-  const toggleAll = useCallback(() => {
-    setSelectedPartIds(allSelected ? new Set() : new Set(parts.map((p) => p.pk)));
-  }, [allSelected, parts]);
+  const toggleCurrentPage = useCallback(() => {
+    setSelectedPartIds((prev) => {
+      const next = new Set(prev);
+      if (allCurrentPageSelected) {
+        for (const pk of pagePartIds) next.delete(pk);
+      } else {
+        for (const pk of pagePartIds) next.add(pk);
+      }
+      return next;
+    });
+  }, [allCurrentPageSelected, pagePartIds]);
 
   const togglePart = useCallback((pk: number) => {
     setSelectedPartIds((prev) => {
@@ -1452,11 +1495,25 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
     }
   }, [bulkResult, bulkSelectedKeys, context.api, pluginSlug]);
 
+  /* -- helpers for reset-on-search-change -- */
+  const handleSearchChange = useCallback((value: string) => {
+    setSearch(value);
+    setPage(1);
+  }, []);
+
+  const handlePageSizeChange = useCallback((value: string) => {
+    const parsed = Number(value);
+    if (PAGE_SIZE_OPTIONS.includes(parsed as typeof PAGE_SIZE_OPTIONS[number])) {
+      setPageSize(parsed);
+      setPage(1);
+    }
+  }, []);
+
   /* -- loading state -- */
-  if (partsLoading) {
+  if (partsLoading && parts.length === 0) {
     return (
       <Paper p="md">
-        <Group><Loader size="sm" /><Text>Loading parts in this category...</Text></Group>
+        <Group><Loader size="sm" /><Text>Loading parts...</Text></Group>
       </Paper>
     );
   }
@@ -1465,10 +1522,12 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
     return <Alert color="red" title="Failed to load parts">{partsError}</Alert>;
   }
 
-  if (parts.length === 0) {
+  if (totalCount === 0 && !search.trim() && !partsLoading) {
     return (
       <Alert color="gray" title="No parts">
-        This category contains no parts to enrich.
+        {allPartsMode
+          ? 'No parts found in the database.'
+          : 'This category (and its subcategories) contains no parts to enrich.'}
       </Alert>
     );
   }
@@ -1479,7 +1538,9 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
         <Stack gap={4}>
           <Title order={4}>Category Enrichment</Title>
           <Text c="dimmed" size="sm">
-            Select parts and providers, then preview or apply supplier data in bulk.
+            {allPartsMode
+              ? 'No category context detected. Showing all parts. Select parts and providers, then preview or apply supplier data in bulk.'
+              : 'Select parts and providers, then preview or apply supplier data in bulk.'}
           </Text>
         </Stack>
 
@@ -1509,9 +1570,9 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
 
         {/* Parts table */}
         <Stack gap="xs">
-          <Group justify="space-between" align="center">
+          <Group justify="space-between" align="center" wrap="nowrap">
             <Text fw={600} size="sm">
-              Parts ({selectedPartIds.size} of {parts.length} selected)
+              Parts ({selectedPartIds.size} of {totalCount} selected)
             </Text>
             <Group gap="xs">
               <Tooltip label={`Preview changes for ${selectedPartIds.size} part(s)`}>
@@ -1528,21 +1589,47 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
             </Group>
           </Group>
 
+          {/* Search + page size row */}
+          <Group gap="sm" align="center" wrap="nowrap">
+            <TextInput
+              placeholder="Search parts..."
+              size="xs"
+              value={search}
+              onChange={(e) => handleSearchChange(e.currentTarget.value)}
+              style={{ flex: 1 }}
+              maw={320}
+            />
+            <Text size="xs" c="dimmed">
+              {totalCount} result{totalCount === 1 ? '' : 's'}
+            </Text>
+            <Group gap={4} align="center" wrap="nowrap">
+              <Text size="xs" c="dimmed">Per page:</Text>
+              <NativeSelect
+                size="xs"
+                value={String(pageSize)}
+                onChange={(e) => handlePageSizeChange(e.currentTarget.value)}
+                data={PAGE_SIZE_OPTIONS.map(String)}
+                w={72}
+              />
+            </Group>
+          </Group>
+
           <ScrollArea.Autosize mah={480}>
             <Table striped highlightOnHover withTableBorder withColumnBorders>
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th w={40}>
                     <Checkbox
-                      checked={allSelected}
-                      indeterminate={someSelected}
-                      onChange={toggleAll}
-                      aria-label="Select all parts"
+                      checked={allCurrentPageSelected}
+                      indeterminate={someCurrentPageSelected}
+                      onChange={toggleCurrentPage}
+                      aria-label="Select all parts on this page"
                     />
                   </Table.Th>
                   <Table.Th>Name</Table.Th>
                   <Table.Th>IPN</Table.Th>
                   <Table.Th>Description</Table.Th>
+                  {allPartsMode && <Table.Th>Category</Table.Th>}
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
@@ -1569,11 +1656,70 @@ function CategoryEnrichPanel({ context }: { context: InvenTreePluginContext }) {
                     <Table.Td>
                       <Text size="sm" lineClamp={1}>{part.description}</Text>
                     </Table.Td>
+                    {allPartsMode && (
+                      <Table.Td>
+                        <Text size="sm" c="dimmed" lineClamp={1}>
+                          {part.category_name ?? '-'}
+                        </Text>
+                      </Table.Td>
+                    )}
                   </Table.Tr>
                 ))}
+                {parts.length === 0 && !partsLoading && (
+                  <Table.Tr>
+                    <Table.Td colSpan={allPartsMode ? 5 : 4}>
+                      <Text size="sm" c="dimmed" ta="center" py="md">
+                        No parts match your search.
+                      </Text>
+                    </Table.Td>
+                  </Table.Tr>
+                )}
               </Table.Tbody>
             </Table>
           </ScrollArea.Autosize>
+
+          {/* Pagination controls */}
+          {totalPages > 1 && (
+            <Group justify="space-between" align="center">
+              <Text size="xs" c="dimmed">
+                Page {page} of {totalPages}
+              </Text>
+              <Group gap="xs">
+                <Button
+                  size="xs"
+                  variant="default"
+                  disabled={page <= 1}
+                  onClick={() => setPage(1)}
+                >
+                  First
+                </Button>
+                <Button
+                  size="xs"
+                  variant="default"
+                  disabled={page <= 1}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                >
+                  Prev
+                </Button>
+                <Button
+                  size="xs"
+                  variant="default"
+                  disabled={page >= totalPages}
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                >
+                  Next
+                </Button>
+                <Button
+                  size="xs"
+                  variant="default"
+                  disabled={page >= totalPages}
+                  onClick={() => setPage(totalPages)}
+                >
+                  Last
+                </Button>
+              </Group>
+            </Group>
+          )}
         </Stack>
       </Stack>
 

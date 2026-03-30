@@ -12,7 +12,7 @@ const externalLibs: Record<string, string> = {
 const externalKeys = Object.keys(externalLibs);
 
 // Bump this version when deploying an updated enrich panel bundle.
-const ENRICH_PANEL_ENTRY_NAME = 'enrich-panel-v13';
+const ENRICH_PANEL_ENTRY_NAME = 'enrich-panel-v14';
 
 export default defineConfig({
   plugins: [
