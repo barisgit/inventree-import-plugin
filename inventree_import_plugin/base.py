@@ -369,11 +369,13 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
                         supplier_part.manufacturer_part = mfr_part
                         supplier_part.save(update_fields=["manufacturer_part"])
                         updated.append("manufacturer_part:link")
-                except Exception:
+                except Exception as exc:
                     logger.warning(
-                        "Failed to link manufacturer part for SKU %s",
+                        "Failed to link manufacturer part for SKU %s: %s",
                         supplier_part.SKU,
+                        exc,
                     )
+                    errors.append(f"manufacturer_part: {exc}")
 
         # Part description/link — update when values differ
         _part_updates: dict[str, Any] = {}

@@ -40,6 +40,32 @@ def _key_allowed(key: str, selected_keys: set[str] | None) -> bool:
     return selected_keys is None or key in selected_keys
 
 
+# Manufacturer field keys that the preview diff exposes as selectable rows.
+_MANUFACTURER_FIELD_KEYS = frozenset(
+    [
+        "manufacturer_part:manufacturer_name",
+        "manufacturer_part:manufacturer_part_number",
+    ]
+)
+
+_MANUFACTURER_LINK_KEY = "manufacturer_part:link"
+
+
+def _manufacturer_link_allowed(selected_keys: set[str] | None) -> bool:
+    """Check whether manufacturer creation/linking is permitted.
+
+    The preview UI exposes individual field keys (e.g.
+    ``manufacturer_part:manufacturer_name``) rather than the synthetic
+    ``manufacturer_part:link`` key.  Tolerate either form so that
+    manufacturer linkage proceeds when any manufacturer field is selected.
+    """
+    if selected_keys is None:
+        return True
+    if _MANUFACTURER_LINK_KEY in selected_keys:
+        return True
+    return bool(selected_keys & _MANUFACTURER_FIELD_KEYS)
+
+
 def _has_datasheet_attachment(part: Any) -> bool:
     """Check whether the part already has a datasheet link attachment."""
     from common.models import Attachment
@@ -510,7 +536,7 @@ def enrich_part_for_provider(
             and fresh.manufacturer_part_number
             and not getattr(supplier_part, "manufacturer_part", None)
         ):
-            if _key_allowed("manufacturer_part:link", selected_keys):
+            if _manufacturer_link_allowed(selected_keys):
                 try:
                     from company.models import Company, ManufacturerPart
 

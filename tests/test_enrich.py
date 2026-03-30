@@ -1021,3 +1021,104 @@ class TestServiceManufacturerEnrich:
 
         diff = result["diff"]
         assert diff["manufacturer_part"] == []
+
+
+class TestServiceManufacturerSelectedKeysRegression:
+    """Regression: selecting manufacturer_part field keys must enable linking.
+
+    The preview diff exposes selectable rows like
+    ``manufacturer_part:manufacturer_name`` and
+    ``manufacturer_part:manufacturer_part_number``.  The backend must treat
+    any of those as permitting manufacturer creation/linkage, not only the
+    synthetic ``manufacturer_part:link`` key.
+    """
+
+    def test_field_key_manufacturer_name_enables_link(self, monkeypatch, runtime):
+        supplier_part = _make_supplier_part()
+        supplier_part.manufacturer_part = None
+        result, harness = _run_service(
+            monkeypatch,
+            runtime,
+            supplier_part=supplier_part,
+            selected_keys={"manufacturer_part:manufacturer_name"},
+        )
+
+        assert "manufacturer_part:link" in result["updated"]
+        assert harness.manufacturer_part_manager.records
+
+    def test_field_key_manufacturer_part_number_enables_link(self, monkeypatch, runtime):
+        supplier_part = _make_supplier_part()
+        supplier_part.manufacturer_part = None
+        result, harness = _run_service(
+            monkeypatch,
+            runtime,
+            supplier_part=supplier_part,
+            selected_keys={"manufacturer_part:manufacturer_part_number"},
+        )
+
+        assert "manufacturer_part:link" in result["updated"]
+        assert harness.manufacturer_part_manager.records
+
+    def test_both_field_keys_enables_link(self, monkeypatch, runtime):
+        supplier_part = _make_supplier_part()
+        supplier_part.manufacturer_part = None
+        result, harness = _run_service(
+            monkeypatch,
+            runtime,
+            supplier_part=supplier_part,
+            selected_keys={
+                "manufacturer_part:manufacturer_name",
+                "manufacturer_part:manufacturer_part_number",
+            },
+        )
+
+        assert "manufacturer_part:link" in result["updated"]
+        assert harness.manufacturer_part_manager.records
+
+    def test_synthetic_link_key_still_works(self, monkeypatch, runtime):
+        supplier_part = _make_supplier_part()
+        supplier_part.manufacturer_part = None
+        result, harness = _run_service(
+            monkeypatch,
+            runtime,
+            supplier_part=supplier_part,
+            selected_keys={"manufacturer_part:link"},
+        )
+
+        assert "manufacturer_part:link" in result["updated"]
+        assert harness.manufacturer_part_manager.records
+
+    def test_unrelated_key_skips_manufacturer(self, monkeypatch, runtime):
+        supplier_part = _make_supplier_part()
+        supplier_part.manufacturer_part = None
+        result, _ = _run_service(
+            monkeypatch,
+            runtime,
+            supplier_part=supplier_part,
+            selected_keys={"part:description"},
+        )
+
+        assert "manufacturer_part:link" in result["skipped"]
+
+
+class TestBaseManufacturerErrorReporting:
+    """Regression: base.py legacy enrich path must append error on failure."""
+
+    def test_manufacturer_link_failure_appends_error(self, monkeypatch, runtime):
+        supplier_part = _make_supplier_part()
+        supplier_part.manufacturer_part = None
+
+        def _failing_import(data, *, part):
+            raise RuntimeError("DB connection lost")
+
+        harness = _install_backend(
+            monkeypatch,
+            runtime,
+            supplier_part=supplier_part,
+        )
+        plugin = _BasePlugin(_make_fresh())
+        plugin.import_manufacturer_part = _failing_import
+        result = plugin._enrich_part(harness.part.pk, dry_run=False)
+
+        assert any("manufacturer_part" in e for e in result["errors"])
+        assert "manufacturer_part:link" not in result["updated"]

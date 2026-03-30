@@ -441,18 +441,32 @@ function getSelectableResultKeys(result: EnrichResult): Set<string> {
   );
 }
 
+/** Manufacturer-related field keys exposed in the preview diff. */
+const MANUFACTURER_FIELD_KEYS = [
+  'manufacturer_part:manufacturer_name',
+  'manufacturer_part:manufacturer_part_number',
+] as const;
+
+/** The synthetic backend key that gates manufacturer creation/linking. */
+const MANUFACTURER_LINK_KEY = 'manufacturer_part:link';
+
 function expandSelectedKeysForApply(result: EnrichResult, selectedKeys: Set<string>): string[] {
   const expanded = new Set(selectedKeys);
 
   for (const key of selectedKeys) {
-    if (!key.startsWith('parameter:')) {
+    if (key.startsWith('parameter:')) {
+      const parameterName = key.slice('parameter:'.length);
+      const supplierParameterKey = `supplier_parameter:${parameterName}`;
+      if (result.updated.includes(supplierParameterKey)) {
+        expanded.add(supplierParameterKey);
+      }
       continue;
     }
 
-    const parameterName = key.slice('parameter:'.length);
-    const supplierParameterKey = `supplier_parameter:${parameterName}`;
-    if (result.updated.includes(supplierParameterKey)) {
-      expanded.add(supplierParameterKey);
+    // Expand manufacturer field keys to include the backend link key so the
+    // apply endpoint actually creates/links the manufacturer part.
+    if (MANUFACTURER_FIELD_KEYS.includes(key as typeof MANUFACTURER_FIELD_KEYS[number])) {
+      expanded.add(MANUFACTURER_LINK_KEY);
     }
   }
 
