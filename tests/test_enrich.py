@@ -1523,7 +1523,7 @@ class TestSupplierStockParameter:
         assert "supplier_parameter:Supplier Stock" not in result["updated"]
         assert "supplier_parameter:Supplier Stock" not in result["skipped"]
 
-    def test_not_created_when_stock_is_zero(
+    def test_creates_when_stock_is_zero(
         self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
     ):
         result, _ = _run_service(
@@ -1532,8 +1532,28 @@ class TestSupplierStockParameter:
             fresh=_make_fresh(extra_data={"stock": 0}),
         )
 
-        assert "supplier_parameter:Supplier Stock" not in result["updated"]
-        assert "supplier_parameter:Supplier Stock" not in result["skipped"]
+        assert "supplier_parameter:Supplier Stock" in result["updated"]
+
+    def test_zero_stock_updates_existing_supplier_available_and_parameter(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        template = _Template("Supplier Stock", "")
+        supplier_part = _make_supplier_part(available=25)
+        supplier_part.update_available_quantity = MagicMock()
+        existing = _ParamRecord(template=template, model_id=supplier_part.pk, value="25")
+        result, _ = _run_service(
+            monkeypatch,
+            runtime,
+            supplier_part=supplier_part,
+            templates=[template],
+            parameters=[existing],
+            fresh=_make_fresh(extra_data={"stock": 0}),
+        )
+
+        assert "supplier_part:available" in result["updated"]
+        assert "supplier_parameter:Supplier Stock" in result["updated"]
+        supplier_part.update_available_quantity.assert_called_once_with(0)
+        assert existing.data == "0"
 
     def test_updates_existing_supplier_stock(
         self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
@@ -1582,6 +1602,25 @@ class TestSupplierStockParameter:
         assert len(stock_rows) == 1
         assert stock_rows[0]["status"] == "new"
         assert stock_rows[0]["incoming"] == "100"
+
+    def test_preview_diff_includes_zero_supplier_stock(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        result, _ = _run_service(
+            monkeypatch,
+            runtime,
+            dry_run=True,
+            fresh=_make_fresh(extra_data={"stock": 0}),
+        )
+
+        diff = result["diff"]
+        stock_rows = [
+            r
+            for r in diff["supplier_parameters"]
+            if normalize_name(r["name"]) == normalize_name("Supplier Stock")
+        ]
+        assert len(stock_rows) == 1
+        assert stock_rows[0]["incoming"] == "0"
 
     def test_no_duplicate_when_provider_already_includes_stock_parameter(
         self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace

@@ -12,6 +12,7 @@ from inventree_import_plugin.suppliers.lcsc import (
     _map_to_part_data,
     _parse_parameters,
     _parse_price_breaks,
+    _parse_stock,
     fetch_lcsc_part,
     search_lcsc,
 )
@@ -61,7 +62,11 @@ class TestMapToPartData:
         assert part.name == "C12345"
 
     def test_image_url_falls_back_to_single_field(self) -> None:
-        product = {**MINIMAL_PRODUCT, "productImages": None, "productImageUrl": "https://img2.com/x.jpg"}
+        product = {
+            **MINIMAL_PRODUCT,
+            "productImages": None,
+            "productImageUrl": "https://img2.com/x.jpg",
+        }
         part = _map_to_part_data(product)
         assert part.image_url == "https://img2.com/x.jpg"
 
@@ -78,8 +83,8 @@ class TestMapToPartData:
     def test_price_breaks_parsed(self) -> None:
         part = _map_to_part_data(MINIMAL_PRODUCT)
         assert len(part.price_breaks) == 2
-        assert part.price_breaks[0] == PriceBreak(quantity=1, price=0.15, currency="EUR")
-        assert part.price_breaks[1] == PriceBreak(quantity=10, price=0.12, currency="EUR")
+        assert part.price_breaks[0] == PriceBreak(quantity=1, price=0.15, currency="USD")
+        assert part.price_breaks[1] == PriceBreak(quantity=10, price=0.12, currency="USD")
 
     def test_dash_parameter_skipped(self) -> None:
         part = _map_to_part_data(MINIMAL_PRODUCT)
@@ -91,6 +96,26 @@ class TestMapToPartData:
         part = _map_to_part_data(MINIMAL_PRODUCT)
         assert isinstance(part, PartData)
 
+    def test_maps_stock_from_stock_number(self) -> None:
+        product = {**MINIMAL_PRODUCT, "stockNumber": 123}
+        part = _map_to_part_data(product)
+        assert part.extra_data["stock"] == 123
+
+    def test_maps_zero_stock_from_stock_number(self) -> None:
+        product = {**MINIMAL_PRODUCT, "stockNumber": 0}
+        part = _map_to_part_data(product)
+        assert part.extra_data["stock"] == 0
+
+    def test_maps_stock_from_domestic_and_overseas_totals(self) -> None:
+        product = {
+            **MINIMAL_PRODUCT,
+            "stockNumber": None,
+            "domesticStockVO": {"total": 7},
+            "overseasStockVO": {"total": 5},
+        }
+        part = _map_to_part_data(product)
+        assert part.extra_data["stock"] == 12
+
 
 # ---------------------------------------------------------------------------
 # _parse_price_breaks
@@ -101,7 +126,7 @@ class TestParsePriceBreaks:
     def test_comma_decimal_separator(self) -> None:
         product = {"productPriceList": [{"ladder": "5", "productPrice": "1,25"}]}
         breaks = _parse_price_breaks(product, "C1")
-        assert breaks == [PriceBreak(quantity=5, price=1.25, currency="EUR")]
+        assert breaks == [PriceBreak(quantity=5, price=1.25, currency="USD")]
 
     def test_float_price(self) -> None:
         product = {"productPriceList": [{"ladder": "1", "productPrice": 0.99}]}
@@ -124,20 +149,33 @@ class TestParsePriceBreaks:
 
 class TestParseParameters:
     def test_valid_parameter(self) -> None:
-        product = {
-            "paramVOList": [{"paramNameEn": "Voltage", "paramValueEn": "3.3V"}]
-        }
+        product = {"paramVOList": [{"paramNameEn": "Voltage", "paramValueEn": "3.3V"}]}
         params = _parse_parameters(product, "C1")
         assert params == [PartParameter(name="Voltage", value="3.3V")]
 
     def test_dash_value_skipped(self) -> None:
-        product = {
-            "paramVOList": [{"paramNameEn": "Pkg", "paramValueEn": "-"}]
-        }
+        product = {"paramVOList": [{"paramNameEn": "Pkg", "paramValueEn": "-"}]}
         assert _parse_parameters(product, "C1") == []
 
     def test_missing_param_list(self) -> None:
         assert _parse_parameters({}, "C1") == []
+
+
+class TestParseStock:
+    def test_prefers_stock_number(self) -> None:
+        assert _parse_stock({"stockNumber": 42, "domesticStockVO": {"total": 7}}) == 42
+
+    def test_zero_stock_is_valid(self) -> None:
+        assert _parse_stock({"stockNumber": 0}) == 0
+
+    def test_falls_back_to_domestic_and_overseas(self) -> None:
+        assert _parse_stock({"domesticStockVO": {"total": 3}, "overseasStockVO": {"total": 4}}) == 7
+
+    def test_falls_back_to_other_stock_fields(self) -> None:
+        assert _parse_stock({"stockSz": "9"}) == 9
+
+    def test_returns_none_when_no_stock_present(self) -> None:
+        assert _parse_stock({}) is None
 
 
 # ---------------------------------------------------------------------------
@@ -149,11 +187,7 @@ class TestSearchLcsc:
     def _mock_response(self, product_list: list) -> MagicMock:
         resp = MagicMock()
         resp.json.return_value = {
-            "result": {
-                "productSearchResultVO": {
-                    "productList": product_list
-                }
-            }
+            "result": {"productSearchResultVO": {"productList": product_list}}
         }
         resp.raise_for_status.return_value = None
         return resp

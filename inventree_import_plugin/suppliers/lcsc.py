@@ -119,6 +119,7 @@ def _map_to_part_data(product: dict[str, Any]) -> PartData:
 
     price_breaks = _parse_price_breaks(product, sku)
     parameters = _parse_parameters(product, sku)
+    stock = _parse_stock(product)
 
     return PartData(
         sku=sku,
@@ -131,6 +132,7 @@ def _map_to_part_data(product: dict[str, Any]) -> PartData:
         datasheet_url=datasheet_url,
         price_breaks=price_breaks,
         parameters=parameters,
+        extra_data={"stock": stock} if stock is not None else {},
     )
 
 
@@ -180,3 +182,35 @@ def _parse_parameters(product: dict[str, Any], sku: str) -> list[PartParameter]:
         if name and value and value.strip() != "-":
             params.append(PartParameter(name=name, value=value))
     return params
+
+
+def _parse_stock(product: dict[str, Any]) -> int | None:
+    """Extract supplier stock from an LCSC detail response.
+
+    Prefer the top-level ``stockNumber`` total. If it is missing, fall back to
+    domestic/overseas totals, then other stock-like fields.
+    """
+
+    def to_int(value: Any) -> int | None:
+        if value is None or value == "":
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    stock_number = to_int(product.get("stockNumber"))
+    if stock_number is not None:
+        return stock_number
+
+    domestic_total = to_int((product.get("domesticStockVO") or {}).get("total"))
+    overseas_total = to_int((product.get("overseasStockVO") or {}).get("total"))
+    if domestic_total is not None or overseas_total is not None:
+        return (domestic_total or 0) + (overseas_total or 0)
+
+    for key in ("stockSz", "stockJs", "wmStockHk"):
+        value = to_int(product.get(key))
+        if value is not None:
+            return value
+
+    return None

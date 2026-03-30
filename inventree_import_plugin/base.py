@@ -114,14 +114,14 @@ def _enrich_parameters(fresh: PartData) -> list[PartParameter]:
 def _get_supplier_stock_param(fresh: PartData) -> PartParameter | None:
     """Return the synthetic Supplier Stock parameter when available.
 
-    Returns a ``PartParameter`` when ``extra_data['stock']`` is a positive
+    Returns a ``PartParameter`` when ``extra_data['stock']`` is a non-negative
     integer and the provider does not already include a matching parameter.
     Returns ``None`` otherwise (including when the provider supplies its own
     ``Supplier Stock`` parameter — in that case the provider parameter flows
     through the regular ``_enrich_parameters`` path).
     """
     stock = fresh.extra_data.get("stock")
-    if not (isinstance(stock, int) and stock > 0):
+    if not (isinstance(stock, int) and stock >= 0):
         return None
     key = normalize_name(SUPPLIER_STOCK_PARAMETER_NAME)
     if any(normalize_name(p.name) == key for p in fresh.parameters):
@@ -135,8 +135,8 @@ def supplier_part_defaults(data: PartData) -> dict[str, Any]:
     Extracts supplier-owned fields that should be persisted on every
     ``SupplierPart`` record: ``description``, ``link``, and ``available``.
 
-    Stock / availability fields are only included when the provider
-    supplies a non-zero ``stock`` value in ``extra_data``.
+    Stock / availability fields are included when the provider supplies a
+    non-negative integer ``stock`` value in ``extra_data``.
     """
     defaults: dict[str, Any] = {"link": data.link}
 
@@ -144,7 +144,7 @@ def supplier_part_defaults(data: PartData) -> dict[str, Any]:
         defaults["description"] = data.description
 
     stock = data.extra_data.get("stock")
-    if isinstance(stock, int) and stock > 0:
+    if isinstance(stock, int) and stock >= 0:
         defaults["available"] = stock
 
     return defaults
@@ -158,7 +158,7 @@ def supplier_part_update_values(
     available_quantity: int | None = None
 
     for field, value in supplier_part_defaults(data).items():
-        if not value:
+        if value is None or value == "":
             continue
 
         current = getattr(supplier_part, field, None)
