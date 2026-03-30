@@ -9,7 +9,6 @@ from inventree_import_plugin.base import (
     _download_and_set_image,
     _enrich_parameters,
     _find_by_normalized_name,
-    _get_supplier_stock_param,
     _get_parameter_model_dependencies,
     _parameter_filter_kwargs,
     _resolve_by_normalized_name,
@@ -352,44 +351,6 @@ def _build_diff(
             }
         )
 
-    # Supplier-only parameter rows (currently Supplier Stock)
-    supplier_parameter_rows: list[dict[str, Any]] = []
-    supplier_stock_param = _get_supplier_stock_param(fresh)
-    if (
-        supplier_stock_param is not None
-        and content_type_model is not None
-        and supplier_part is not None
-    ):
-        template = _find_by_normalized_name(
-            parameter_template_model.objects,
-            supplier_stock_param.name,
-        )
-        current_value = None
-        exists = False
-        if template is not None:
-            sp_kwargs = _parameter_filter_kwargs(supplier_part, template, content_type_model)
-            existing_sp_param = parameter_model.objects.filter(**sp_kwargs).first()
-            if existing_sp_param is not None:
-                current_value = getattr(existing_sp_param, "data", None) or getattr(
-                    existing_sp_param, "value", None
-                )
-                exists = True
-        if exists and current_value != supplier_stock_param.value:
-            status = "updated"
-        elif exists:
-            status = "skipped"
-        else:
-            status = "new"
-        supplier_parameter_rows.append(
-            {
-                "name": supplier_stock_param.name,
-                "units": supplier_stock_param.units,
-                "current": current_value,
-                "incoming": supplier_stock_param.value,
-                "status": status,
-            }
-        )
-
     # Manufacturer part diff -- fill-missing
     mfr_diff_rows: list[dict[str, Any]] = []
     if supplier_part is not None:
@@ -421,7 +382,6 @@ def _build_diff(
         "datasheet": datasheet_diff,
         "price_breaks": price_break_rows,
         "parameters": parameter_rows,
-        "supplier_parameters": supplier_parameter_rows,
         "part_fields": part_field_rows,
         "supplier_part": sp_diff_rows,
         "manufacturer_part": mfr_diff_rows,
@@ -811,63 +771,6 @@ def enrich_part_for_provider(
                             skipped.append(sp_key)
             except Exception as exc:
                 errors.append(f"parameter:{param.name}: {exc}")
-
-        # Supplier-only synthetic parameters (currently Supplier Stock)
-        supplier_stock_param = _get_supplier_stock_param(fresh)
-        if supplier_stock_param is not None and content_type_model is not None:
-            sp_key = f"supplier_parameter:{supplier_stock_param.name}"
-            try:
-                if dry_run:
-                    template = _find_by_normalized_name(
-                        parameter_template_model.objects, supplier_stock_param.name
-                    )
-                    if template is None:
-                        updated.append(sp_key)
-                    else:
-                        sp_kwargs = _parameter_filter_kwargs(
-                            supplier_part, template, content_type_model
-                        )
-                        existing_sp_param = parameter_model.objects.filter(**sp_kwargs).first()
-                        if existing_sp_param is None:
-                            updated.append(sp_key)
-                        else:
-                            current_sp_value = getattr(existing_sp_param, "data", None) or getattr(
-                                existing_sp_param, "value", None
-                            )
-                            if current_sp_value != supplier_stock_param.value:
-                                updated.append(sp_key)
-                            else:
-                                skipped.append(sp_key)
-                else:
-                    if not _key_allowed(sp_key, selected_keys):
-                        skipped.append(sp_key)
-                    else:
-                        template, _ = _resolve_by_normalized_name(
-                            parameter_template_model.objects,
-                            supplier_stock_param.name,
-                            defaults={"units": supplier_stock_param.units},
-                        )
-                        sp_kwargs = _parameter_filter_kwargs(
-                            supplier_part, template, content_type_model
-                        )
-                        existing_sp_param = parameter_model.objects.filter(**sp_kwargs).first()
-                        if existing_sp_param is None:
-                            _create_param_with_user(
-                                parameter_model, user, **sp_kwargs, data=supplier_stock_param.value
-                            )
-                            updated.append(sp_key)
-                        else:
-                            current_sp_value = getattr(existing_sp_param, "data", None) or getattr(
-                                existing_sp_param, "value", None
-                            )
-                            if current_sp_value != supplier_stock_param.value:
-                                existing_sp_param.data = supplier_stock_param.value
-                                _save_param_with_user(existing_sp_param, user, ["data"])
-                                updated.append(sp_key)
-                            else:
-                                skipped.append(sp_key)
-            except Exception as exc:
-                errors.append(f"supplier_parameter:{supplier_stock_param.name}: {exc}")
 
         diff = _build_diff(
             dry_run=dry_run,

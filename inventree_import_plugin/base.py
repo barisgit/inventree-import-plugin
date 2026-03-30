@@ -7,7 +7,7 @@ from typing import Any
 
 from inventree_import_plugin import PLUGIN_VERSION
 from inventree_import_plugin.compat import SearchResult, Supplier
-from inventree_import_plugin.models import PartData, PartParameter
+from inventree_import_plugin.models import PartData
 
 __all__ = [
     "BaseImportPlugin",
@@ -98,35 +98,9 @@ def _create_param_with_user(model: Any, user: Any, **kwargs: Any) -> Any:
     return instance
 
 
-SUPPLIER_STOCK_PARAMETER_NAME = "Supplier Stock"
-"""Canonical parameter name used to persist supplier stock on SupplierPart."""
-
-
 def _enrich_parameters(fresh: PartData) -> list[PartParameter]:
-    """Return the provider-supplied parameters (excluding synthetic Supplier Stock).
-
-    Use ``_get_supplier_stock_param`` to obtain the synthetic Supplier Stock
-    parameter derived from ``extra_data['stock']``.
-    """
+    """Return the provider-supplied parameters."""
     return list(fresh.parameters)
-
-
-def _get_supplier_stock_param(fresh: PartData) -> PartParameter | None:
-    """Return the synthetic Supplier Stock parameter when available.
-
-    Returns a ``PartParameter`` when ``extra_data['stock']`` is a non-negative
-    integer and the provider does not already include a matching parameter.
-    Returns ``None`` otherwise (including when the provider supplies its own
-    ``Supplier Stock`` parameter — in that case the provider parameter flows
-    through the regular ``_enrich_parameters`` path).
-    """
-    stock = fresh.extra_data.get("stock")
-    if not (isinstance(stock, int) and stock >= 0):
-        return None
-    key = normalize_name(SUPPLIER_STOCK_PARAMETER_NAME)
-    if any(normalize_name(p.name) == key for p in fresh.parameters):
-        return None
-    return PartParameter(name=SUPPLIER_STOCK_PARAMETER_NAME, value=str(stock))
 
 
 def supplier_part_defaults(data: PartData) -> dict[str, Any]:
@@ -669,63 +643,6 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
                             skipped.append(f"supplier_parameter:{param.name}")
             except Exception as exc:
                 errors.append(f"parameter:{param.name}: {exc}")
-
-        # Supplier-only synthetic parameters (currently Supplier Stock)
-        supplier_stock_param = _get_supplier_stock_param(fresh)
-        if supplier_stock_param is not None and content_type_model is not None:
-            try:
-                if dry_run:
-                    template = _find_by_normalized_name(
-                        parameter_template_model.objects,
-                        supplier_stock_param.name,
-                    )
-                    if template is None:
-                        updated.append(f"supplier_parameter:{supplier_stock_param.name}")
-                    else:
-                        sp_kwargs = _parameter_filter_kwargs(
-                            supplier_part, template, content_type_model
-                        )
-                        existing_sp_param = parameter_model.objects.filter(**sp_kwargs).first()
-                        if existing_sp_param is None:
-                            updated.append(f"supplier_parameter:{supplier_stock_param.name}")
-                        else:
-                            current_sp_value = getattr(existing_sp_param, "data", None) or getattr(
-                                existing_sp_param, "value", None
-                            )
-                            if current_sp_value != supplier_stock_param.value:
-                                updated.append(f"supplier_parameter:{supplier_stock_param.name}")
-                            else:
-                                skipped.append(f"supplier_parameter:{supplier_stock_param.name}")
-                else:
-                    template, _ = _resolve_by_normalized_name(
-                        parameter_template_model.objects,
-                        supplier_stock_param.name,
-                        defaults={"units": supplier_stock_param.units},
-                    )
-                    sp_kwargs = _parameter_filter_kwargs(
-                        supplier_part, template, content_type_model
-                    )
-                    existing_sp_param = parameter_model.objects.filter(**sp_kwargs).first()
-                    if existing_sp_param is None:
-                        _create_param_with_user(
-                            parameter_model,
-                            user,
-                            **sp_kwargs,
-                            data=supplier_stock_param.value,
-                        )
-                        updated.append(f"supplier_parameter:{supplier_stock_param.name}")
-                    else:
-                        current_sp_value = getattr(existing_sp_param, "data", None) or getattr(
-                            existing_sp_param, "value", None
-                        )
-                        if current_sp_value != supplier_stock_param.value:
-                            existing_sp_param.data = supplier_stock_param.value
-                            _save_param_with_user(existing_sp_param, user, ["data"])
-                            updated.append(f"supplier_parameter:{supplier_stock_param.name}")
-                        else:
-                            skipped.append(f"supplier_parameter:{supplier_stock_param.name}")
-            except Exception as exc:
-                errors.append(f"supplier_parameter:{supplier_stock_param.name}: {exc}")
 
         return {"updated": updated, "skipped": skipped, "errors": errors}
 
