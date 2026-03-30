@@ -19,6 +19,19 @@ DATASHEET_ATTACHMENT_COMMENT = "Datasheet (supplier)"
 """Stable comment used to tag and identify datasheet link attachments."""
 
 
+def _to_numeric(value: Any) -> float | int | None:
+    """Coerce a value to a JSON-safe numeric type.
+
+    Handles Money-like objects (e.g. from django-money) by extracting the
+    ``amount`` attribute.  Returns ``None`` for ``None`` inputs unchanged.
+    """
+    if value is None:
+        return None
+    if hasattr(value, "amount"):
+        return float(value.amount)
+    return float(value)
+
+
 def _key_allowed(key: str, selected_keys: set[str] | None) -> bool:
     """Return True if *key* passes the ``selected_keys`` filter.
 
@@ -132,7 +145,7 @@ def _build_diff(
     part: Any,
     fresh: Any,
     supplier_part: Any | None = None,
-    existing_price_breaks: dict[int, tuple[float, str]],
+    existing_price_breaks: dict[int, tuple[float | None, str]],
     parameter_model: Any,
     parameter_template_model: Any,
     content_type_model: Any,
@@ -546,7 +559,7 @@ def enrich_part_for_provider(
 
             if (
                 existing_pb is not None
-                and existing_pb.price == price_break.price
+                and _to_numeric(existing_pb.price) == _to_numeric(price_break.price)
                 and existing_pb.price_currency == price_break.currency
             ):
                 skipped.append(key)
@@ -661,7 +674,8 @@ def enrich_part_for_provider(
             fresh=fresh,
             supplier_part=supplier_part,
             existing_price_breaks={
-                qty: (pb.price, pb.price_currency) for qty, pb in existing_pb_map.items()
+                qty: (_to_numeric(pb.price), pb.price_currency)
+                for qty, pb in existing_pb_map.items()
             },
             parameter_model=parameter_model,
             parameter_template_model=parameter_template_model,

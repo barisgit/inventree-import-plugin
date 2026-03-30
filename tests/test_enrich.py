@@ -8,6 +8,8 @@ from types import SimpleNamespace
 from typing import Sequence
 from unittest.mock import MagicMock
 
+import json
+
 import pytest
 
 import inventree_import_plugin.base as base_module
@@ -74,6 +76,27 @@ class _PriceBreakRecord:
         self.save = MagicMock()
 
 
+class _MoneyLike:
+    """Simulates a django-money Money object."""
+
+    def __init__(self, amount: float, currency: str):
+        self.amount = amount
+        self.currency = currency
+
+    def __repr__(self):
+        return f"Money({self.amount!r}, {self.currency!r})"
+
+
+class _MoneyPriceBreakRecord:
+    """SupplierPriceBreak-like record whose .price is a Money object."""
+
+    def __init__(self, quantity: int, price: float, currency: str):
+        self.quantity = quantity
+        self.price = _MoneyLike(price, currency)
+        self.price_currency = currency
+        self.save = MagicMock()
+
+
 class _AttachmentRecord:
     def __init__(self, *, model_id: int, link: str, comment: str):
         self.model_type = "part"
@@ -118,7 +141,7 @@ class _SupplierPartManager:
 
 
 class _PriceBreakManager:
-    def __init__(self, records: list[_PriceBreakRecord] | None = None):
+    def __init__(self, records: Sequence[object] | None = None):
         self.records = list(records or [])
 
     def filter(self, **_kwargs):
@@ -319,7 +342,7 @@ def _install_backend(
     *,
     part: MagicMock | None = None,
     supplier_part: MagicMock | None = None,
-    price_breaks: list[_PriceBreakRecord] | None = None,
+    price_breaks: Sequence[object] | None = None,
     attachments: list[_AttachmentRecord] | None = None,
     templates: list[_Template] | None = None,
     parameters: list[_ParamRecord] | None = None,
@@ -377,7 +400,7 @@ def _run_base(
     fresh: PartData | None = None,
     part: MagicMock | None = None,
     supplier_part: MagicMock | None = None,
-    price_breaks: list[_PriceBreakRecord] | None = None,
+    price_breaks: Sequence[object] | None = None,
     attachments: list[_AttachmentRecord] | None = None,
     templates: list[_Template] | None = None,
     parameters: list[_ParamRecord] | None = None,
@@ -406,7 +429,7 @@ def _run_service(
     fresh: PartData | None = None,
     part: MagicMock | None = None,
     supplier_part: MagicMock | None = None,
-    price_breaks: list[_PriceBreakRecord] | None = None,
+    price_breaks: Sequence[object] | None = None,
     attachments: list[_AttachmentRecord] | None = None,
     templates: list[_Template] | None = None,
     parameters: list[_ParamRecord] | None = None,
@@ -762,3 +785,48 @@ class TestBaseEnrich:
         assert supplier_param.data == "5V"
         part_param.save.assert_called_once_with(update_fields=["data"])
         supplier_param.save.assert_called_once_with(update_fields=["data"])
+
+
+class TestMoneyPriceBreakRegression:
+    """Regression tests for Money-object handling in price-break diffs."""
+
+    def test_to_numeric_extracts_amount_from_money_like(self):
+        money = _MoneyLike(1.23, "EUR")
+        assert enrich_module._to_numeric(money) == 1.23
+        assert isinstance(enrich_module._to_numeric(money), float)
+
+    def test_to_numeric_passes_plain_float(self):
+        assert enrich_module._to_numeric(0.15) == 0.15
+        assert enrich_module._to_numeric(5) == 5.0
+        assert enrich_module._to_numeric(None) is None
+
+    def test_preview_diff_json_safe_with_money_price(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        existing = _MoneyPriceBreakRecord(quantity=1, price=0.10, currency="USD")
+        result, _ = _run_service(monkeypatch, runtime, dry_run=True, price_breaks=[existing])
+
+        diff = result["diff"]
+        # Must not raise -- proves JSON-serializable
+        serialized = json.dumps(diff)
+        assert '"current_price": 0.1' in serialized or '"current_price":0.1' in serialized
+        assert diff["price_breaks"][0]["status"] == "updated"
+        assert diff["price_breaks"][0]["current_price"] == 0.10
+
+    def test_apply_skips_when_money_price_matches(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        existing = _MoneyPriceBreakRecord(quantity=1, price=0.15, currency="EUR")
+        result, _ = _run_service(monkeypatch, runtime, dry_run=False, price_breaks=[existing])
+
+        assert "price_break:1" in result["skipped"]
+        existing.save.assert_not_called()
+
+    def test_apply_updates_when_money_price_differs(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        existing = _MoneyPriceBreakRecord(quantity=1, price=0.10, currency="USD")
+        result, _ = _run_service(monkeypatch, runtime, dry_run=False, price_breaks=[existing])
+
+        assert "price_break:1" in result["updated"]
+        existing.save.assert_called_once_with(update_fields=["price", "price_currency"])
