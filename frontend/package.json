@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc -b && vite build --config vite.config.ts --emptyOutDir && vite build --config vite.bulk.config.ts",
     "dev": "vite --config vite.dev.config.ts --host",
-    "lint": "tsc -b --pretty false"
+    "lint": "tsc -b --pretty false",
+    "translate": "node -e \"process.exit(0)\""
   },
   "dependencies": {
     "@inventreedb/ui": "latest",
