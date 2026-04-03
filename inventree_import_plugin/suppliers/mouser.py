@@ -45,14 +45,17 @@ def _parse_price(price_str: str) -> float:
 
 def _map_part_data(part: dict[str, Any]) -> PartData:
     """Map a Mouser API part dict to a normalised :class:`PartData` instance."""
-    parameters = [
-        PartParameter(
-            name=attr["AttributeName"],
-            value=attr["AttributeValue"],
-        )
-        for attr in part.get("ProductAttributes", [])
-        if attr.get("AttributeName") and attr.get("AttributeValue")
-    ]
+    packaging_values: list[str] = []
+    parameters: list[PartParameter] = []
+    for attr in part.get("ProductAttributes", []):
+        name = attr.get("AttributeName", "")
+        value = attr.get("AttributeValue", "")
+        if not name or not value:
+            continue
+        if name == "Packaging":
+            packaging_values.append(value)
+            continue
+        parameters.append(PartParameter(name=name, value=value))
 
     price_breaks: list[PriceBreak] = []
     for pb in part.get("PriceBreaks", []):
@@ -92,6 +95,7 @@ def _map_part_data(part: dict[str, Any]) -> PartData:
             "lifecycle_status": part.get("LifecycleStatus", ""),
             "rohs_compliant": rohs_compliant,
             "stock": _parse_stock(availability),
+            **({"packaging": "; ".join(packaging_values)} if packaging_values else {}),
         },
     )
 

@@ -14,7 +14,7 @@ import pytest
 
 import inventree_import_plugin.base as base_module
 import inventree_import_plugin.services.enrich as enrich_module
-from inventree_import_plugin.base import BaseImportPlugin, normalize_name
+from inventree_import_plugin.base import BaseImportPlugin, normalize_name, supplier_part_defaults
 from inventree_import_plugin.models import PartData, PartParameter, PriceBreak
 
 
@@ -693,7 +693,7 @@ class TestServiceEnrich:
         attachment = _AttachmentRecord(
             model_id=42,
             link="https://example.com/old-datasheet.pdf",
-            comment=enrich_module.DATASHEET_ATTACHMENT_COMMENT,
+            comment="Datasheet (supplier:test-provider)",
         )
         result, harness = _run_service(monkeypatch, runtime, attachments=[attachment])
 
@@ -753,7 +753,7 @@ class TestServiceEnrich:
         attachment = _AttachmentRecord(
             model_id=42,
             link="https://example.com/old-datasheet.pdf",
-            comment=enrich_module.DATASHEET_ATTACHMENT_COMMENT,
+            comment="Datasheet (supplier:test-provider)",
         )
         existing_pb = _PriceBreakRecord(quantity=1, price=0.10, currency="USD")
         result, _ = _run_service(
@@ -851,7 +851,7 @@ class TestBaseEnrich:
         attachment = _AttachmentRecord(
             model_id=42,
             link="https://example.com/old-datasheet.pdf",
-            comment="Datasheet (supplier)",
+            comment="Datasheet (supplier:test-provider)",
         )
         result, _ = _run_base(monkeypatch, runtime, attachments=[attachment])
 
@@ -1564,3 +1564,203 @@ class TestSupplierStockAvailability:
         available_rows = [r for r in diff["supplier_part"] if r["field"] == "available"]
         assert len(available_rows) == 1
         assert available_rows[0]["incoming"] == 0
+
+
+class TestSupplierPartDefaultsPackaging:
+    """supplier_part_defaults persists packaging from extra_data when present."""
+
+    def test_packaging_included_when_present(self) -> None:
+        data = PartData(
+            sku="C12345",
+            name="LM358",
+            description="Op-amp",
+            extra_data={"packaging": "Tray; Tape & Reel"},
+        )
+        defaults = supplier_part_defaults(data)
+        assert defaults["packaging"] == "Tray; Tape & Reel"
+
+    def test_packaging_omitted_when_absent(self) -> None:
+        data = PartData(
+            sku="C12345",
+            name="LM358",
+            description="Op-amp",
+            extra_data={},
+        )
+        defaults = supplier_part_defaults(data)
+        assert "packaging" not in defaults
+
+    def test_packaging_omitted_when_empty(self) -> None:
+        data = PartData(
+            sku="C12345",
+            name="LM358",
+            description="Op-amp",
+            extra_data={"packaging": ""},
+        )
+        defaults = supplier_part_defaults(data)
+        assert "packaging" not in defaults
+
+
+class TestDownloadAndSetImage:
+    """_download_and_set_image must only succeed if an image was actually set."""
+
+    def test_raises_runtime_error_when_all_methods_fail(self) -> None:
+        part = SimpleNamespace(image="", pk=1)
+        with pytest.raises(RuntimeError, match="all methods failed"):
+            base_module._download_and_set_image(part, "https://example.com/image.png")
+
+    def test_legacy_noop_continues_fallback(self) -> None:
+        """Legacy set_image_from_url that does not set an image falls through."""
+        part = SimpleNamespace(
+            image="",
+            pk=1,
+            set_image_from_url=MagicMock(),
+        )
+        with pytest.raises(RuntimeError, match="all methods failed"):
+            base_module._download_and_set_image(part, "https://example.com/image.png")
+        part.set_image_from_url.assert_called_once_with("https://example.com/image.png")
+
+    def test_legacy_success_returns_early(self) -> None:
+        """Legacy set_image_from_url that sets an image returns without fallback."""
+        part = SimpleNamespace(
+            image="",
+            pk=1,
+            set_image_from_url=MagicMock(),
+        )
+
+        def _set_image(_url: str) -> None:
+            part.image = "saved_image.png"
+
+        part.set_image_from_url.side_effect = _set_image
+        base_module._download_and_set_image(part, "https://example.com/image.png")
+        part.set_image_from_url.assert_called_once()
+
+
+class TestDatasheetSupplierScoping:
+    """Datasheet attachments are scoped per provider so different providers do
+    not overwrite each other's datasheet attachment.
+    """
+
+    def test_service_does_not_overwrite_other_provider_attachment(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        other_attachment = _AttachmentRecord(
+            model_id=42,
+            link="https://other-provider.com/datasheet.pdf",
+            comment="Datasheet (supplier:other-provider)",
+        )
+        result, harness = _run_service(
+            monkeypatch,
+            runtime,
+            attachments=[other_attachment],
+        )
+
+        assert "datasheet_link" in result["updated"]
+        # other-provider's attachment must remain untouched
+        assert other_attachment.link == "https://other-provider.com/datasheet.pdf"
+        other_attachment.save.assert_not_called()
+        # new provider-scoped attachment created
+        assert len(harness.attachment_manager.attachments) == 2
+        new_att = harness.attachment_manager.attachments[1]
+        assert new_att.comment == "Datasheet (supplier:test-provider)"
+        assert new_att.link == "https://example.com/new-datasheet.pdf"
+
+    def test_service_updates_own_scoped_attachment(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        own_attachment = _AttachmentRecord(
+            model_id=42,
+            link="https://example.com/old-datasheet.pdf",
+            comment="Datasheet (supplier:test-provider)",
+        )
+        other_attachment = _AttachmentRecord(
+            model_id=42,
+            link="https://other-provider.com/datasheet.pdf",
+            comment="Datasheet (supplier:other-provider)",
+        )
+        result, harness = _run_service(
+            monkeypatch,
+            runtime,
+            attachments=[own_attachment, other_attachment],
+        )
+
+        assert "datasheet_link" in result["updated"]
+        assert own_attachment.link == "https://example.com/new-datasheet.pdf"
+        own_attachment.save.assert_called_once_with(update_fields=["link"])
+        # other-provider's attachment must remain untouched
+        assert other_attachment.link == "https://other-provider.com/datasheet.pdf"
+        other_attachment.save.assert_not_called()
+        # no new attachment created — existing one was updated in place
+        assert len(harness.attachment_manager.attachments) == 2
+
+    def test_service_skips_when_own_scoped_attachment_matches(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        own_attachment = _AttachmentRecord(
+            model_id=42,
+            link="https://example.com/new-datasheet.pdf",
+            comment="Datasheet (supplier:test-provider)",
+        )
+        other_attachment = _AttachmentRecord(
+            model_id=42,
+            link="https://other-provider.com/datasheet.pdf",
+            comment="Datasheet (supplier:other-provider)",
+        )
+        result, harness = _run_service(
+            monkeypatch,
+            runtime,
+            attachments=[own_attachment, other_attachment],
+        )
+
+        assert "datasheet_link" in result["skipped"]
+        own_attachment.save.assert_not_called()
+        other_attachment.save.assert_not_called()
+
+    def test_base_does_not_overwrite_other_provider_attachment(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        other_attachment = _AttachmentRecord(
+            model_id=42,
+            link="https://other-provider.com/datasheet.pdf",
+            comment="Datasheet (supplier:other-provider)",
+        )
+        result, harness = _run_base(
+            monkeypatch,
+            runtime,
+            attachments=[other_attachment],
+        )
+
+        assert "datasheet_link" in result["updated"]
+        assert other_attachment.link == "https://other-provider.com/datasheet.pdf"
+        other_attachment.save.assert_not_called()
+        assert len(harness.attachment_manager.attachments) == 2
+        new_att = harness.attachment_manager.attachments[1]
+        assert new_att.comment == "Datasheet (supplier:test-provider)"
+
+    def test_preview_diff_scoped_to_own_provider(
+        self, monkeypatch: pytest.MonkeyPatch, runtime: SimpleNamespace
+    ):
+        own_attachment = _AttachmentRecord(
+            model_id=42,
+            link="https://example.com/old-datasheet.pdf",
+            comment="Datasheet (supplier:test-provider)",
+        )
+        other_attachment = _AttachmentRecord(
+            model_id=42,
+            link="https://other-provider.com/datasheet.pdf",
+            comment="Datasheet (supplier:other-provider)",
+        )
+        result, _ = _run_service(
+            monkeypatch,
+            runtime,
+            dry_run=True,
+            attachments=[own_attachment, other_attachment],
+        )
+
+        diff = result["diff"]
+        assert diff["datasheet"]["status"] == "updated"
+        assert diff["datasheet"]["current"] == "https://example.com/old-datasheet.pdf"
+        assert diff["datasheet"]["incoming"] == "https://example.com/new-datasheet.pdf"
+
+    def test_datasheet_comment_function(self):
+        assert enrich_module._datasheet_comment("lcsc") == "Datasheet (supplier:lcsc)"
+        assert enrich_module._datasheet_comment("mouser") == "Datasheet (supplier:mouser)"

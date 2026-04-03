@@ -22,7 +22,12 @@ from inventree_import_plugin.providers import get_provider_adapters
 logger = logging.getLogger(__name__)
 
 DATASHEET_ATTACHMENT_COMMENT = "Datasheet (supplier)"
-"""Stable comment used to tag and identify datasheet link attachments."""
+"""Legacy comment for un-scoped datasheet attachments."""
+
+
+def _datasheet_comment(provider_slug: str) -> str:
+    """Return a stable, supplier-specific attachment comment for datasheet links."""
+    return f"Datasheet (supplier:{provider_slug})"
 
 
 def _to_numeric(value: Any) -> float | int | None:
@@ -72,30 +77,30 @@ def _manufacturer_link_allowed(selected_keys: set[str] | None) -> bool:
     return bool(selected_keys & _MANUFACTURER_FIELD_KEYS)
 
 
-def _has_datasheet_attachment(part: Any) -> bool:
-    """Check whether the part already has a datasheet link attachment."""
+def _has_datasheet_attachment(part: Any, provider_slug: str) -> bool:
+    """Check whether the part already has a datasheet link attachment for *provider_slug*."""
     from common.models import Attachment
 
     return Attachment.objects.filter(
         model_type="part",
         model_id=part.pk,
-        comment=DATASHEET_ATTACHMENT_COMMENT,
+        comment=_datasheet_comment(provider_slug),
     ).exists()
 
 
-def _get_existing_datasheet_link(part: Any) -> str | None:
-    """Return the link URL of an existing datasheet attachment, or None."""
+def _get_existing_datasheet_link(part: Any, provider_slug: str) -> str | None:
+    """Return the link URL of an existing datasheet attachment for *provider_slug*, or None."""
     from common.models import Attachment
 
     att = Attachment.objects.filter(
         model_type="part",
         model_id=part.pk,
-        comment=DATASHEET_ATTACHMENT_COMMENT,
+        comment=_datasheet_comment(provider_slug),
     ).first()
     return getattr(att, "link", None) if att else None
 
 
-def _create_datasheet_attachment(part: Any, datasheet_url: str) -> None:
+def _create_datasheet_attachment(part: Any, datasheet_url: str, provider_slug: str) -> None:
     """Create an external-link attachment on the part for the datasheet URL."""
     from common.models import Attachment
 
@@ -103,18 +108,18 @@ def _create_datasheet_attachment(part: Any, datasheet_url: str) -> None:
         model_type="part",
         model_id=part.pk,
         link=datasheet_url,
-        comment=DATASHEET_ATTACHMENT_COMMENT,
+        comment=_datasheet_comment(provider_slug),
     )
 
 
-def _update_datasheet_attachment(part: Any, datasheet_url: str) -> None:
-    """Update the link URL on the existing datasheet attachment."""
+def _update_datasheet_attachment(part: Any, datasheet_url: str, provider_slug: str) -> None:
+    """Update the link URL on the existing datasheet attachment for *provider_slug*."""
     from common.models import Attachment
 
     att = Attachment.objects.filter(
         model_type="part",
         model_id=part.pk,
-        comment=DATASHEET_ATTACHMENT_COMMENT,
+        comment=_datasheet_comment(provider_slug),
     ).first()
     if att is not None:
         att.link = datasheet_url
@@ -181,6 +186,7 @@ def _build_diff(
     parameter_model: Any,
     parameter_template_model: Any,
     content_type_model: Any,
+    provider_slug: str = "",
 ) -> dict[str, Any] | None:
     """Build structured diff data for preview responses. Returns None for apply (non-dry-run)."""
     if not dry_run:
@@ -252,7 +258,7 @@ def _build_diff(
         }
 
     # Datasheet diff — update-on-change (external-link attachment)
-    existing_ds_link = _get_existing_datasheet_link(part)
+    existing_ds_link = _get_existing_datasheet_link(part, provider_slug)
     datasheet_diff: dict[str, Any] | None = None
     if fresh.datasheet_url and not existing_ds_link:
         datasheet_diff = {
@@ -616,14 +622,14 @@ def enrich_part_for_provider(
         else:
             skipped.append("image")
 
-        # Datasheet link -- update-on-change
-        existing_ds_link = _get_existing_datasheet_link(part)
+        # Datasheet link -- update-on-change (scoped per provider)
+        existing_ds_link = _get_existing_datasheet_link(part, provider_slug)
         if fresh.datasheet_url and not existing_ds_link:
             if dry_run:
                 updated.append("datasheet_link")
             elif _key_allowed("datasheet_link", selected_keys):
                 try:
-                    _create_datasheet_attachment(part, fresh.datasheet_url)
+                    _create_datasheet_attachment(part, fresh.datasheet_url, provider_slug)
                     updated.append("datasheet_link")
                 except Exception as exc:
                     logger.warning(
@@ -637,7 +643,7 @@ def enrich_part_for_provider(
                 updated.append("datasheet_link")
             elif _key_allowed("datasheet_link", selected_keys):
                 try:
-                    _update_datasheet_attachment(part, fresh.datasheet_url)
+                    _update_datasheet_attachment(part, fresh.datasheet_url, provider_slug)
                     updated.append("datasheet_link")
                 except Exception as exc:
                     logger.warning(
@@ -784,6 +790,7 @@ def enrich_part_for_provider(
             parameter_model=parameter_model,
             parameter_template_model=parameter_template_model,
             content_type_model=content_type_model,
+            provider_slug=provider_slug,
         )
 
         return cast(

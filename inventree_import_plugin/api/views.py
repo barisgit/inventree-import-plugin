@@ -104,7 +104,7 @@ def build_urlpatterns(plugin: Any) -> list[Any]:
             pathlib.Path(__file__).resolve().parent.parent
             / "static"
             / "bulk"
-            / "StandaloneBulkPage-v2.js"
+            / "StandaloneBulkPage-v3.js"
         )
 
         def get(inner_self, request: Any) -> Any:  # noqa: N805

@@ -211,6 +211,7 @@ const SUPPLIER_PART_FIELD_LABELS: Record<string, string> = {
   description: 'Supplier description',
   link: 'Supplier link',
   available: 'Available quantity',
+  packaging: 'Packaging',
 };
 
 const PART_FIELD_LABELS: Record<string, string> = {
@@ -222,6 +223,12 @@ const MANUFACTURER_PART_FIELD_LABELS: Record<string, string> = {
   manufacturer_name: 'Manufacturer',
   manufacturer_part_number: 'MPN',
 };
+
+/** Shared style for preview diff tables: fills container, prevents Status column clipping. */
+const PREVIEW_TABLE_STYLE: React.CSSProperties = { width: '100%', tableLayout: 'fixed' };
+
+/** Fixed width for the Status column in preview tables. */
+const STATUS_COL_WIDTH = 128;
 
 /** Resolve the authoritative status for a key from the EnrichResult lists. */
 function authoritativeStatus(key: string, result: EnrichResult): ItemStatus {
@@ -548,7 +555,6 @@ function DiffValue({ value, side }: { value: string | null; side: 'current' | 'i
     return <Text size="xs" c="dimmed" fs="italic">None</Text>;
   }
   const isUrl = value.startsWith('http');
-  const display = value.length > 60 ? value.slice(0, 57) + '...' : value;
   const color = side === 'incoming' ? 'green.8' : 'dimmed';
   if (isUrl) {
     return (
@@ -561,15 +567,21 @@ function DiffValue({ value, side }: { value: string | null; side: 'current' | 'i
           size="xs"
           c={color}
           truncate="end"
-          maw={320}
-          style={{ wordBreak: 'break-all', textDecoration: 'underline', cursor: 'pointer' }}
+          maw={400}
+          style={{ textDecoration: 'underline', cursor: 'pointer' }}
         >
-          {display}
+          {value}
         </Text>
       </Tooltip>
     );
   }
-  return <Text size="xs" c={color} style={{ wordBreak: 'break-word' }}>{display}</Text>;
+  return (
+    <Tooltip label={value.length > 40 ? value : undefined} openDelay={300} maw={400}>
+      <Text size="xs" c={color} truncate="end" maw={400}>
+        {value}
+      </Text>
+    </Tooltip>
+  );
 }
 
 function AssetRows({ items, selectable, selectedKeys, onToggleKey, sectionUpdateKeys, onToggleAllInSection }: {
@@ -597,7 +609,7 @@ function AssetRows({ items, selectable, selectedKeys, onToggleKey, sectionUpdate
                 <Text size="sm">{item.label}</Text>
               </Group>
               {hasRichData ? (
-                <Group gap="xs" wrap="nowrap">
+                <Group gap="xs" wrap="nowrap" style={{ flex: 1, minWidth: 0, justifyContent: 'flex-end' }}>
                   <DiffValue value={item.currentValue} side="current" />
                   <Text size="xs" c="dimmed">→</Text>
                   <DiffValue value={item.incomingValue} side="incoming" />
@@ -626,14 +638,14 @@ function ParameterRows({ items, selectable, selectedKeys, onToggleKey, sectionUp
   return (
     <Stack gap={4}>
       <SectionHeader label="Parameters" count={items.length} selectable={selectable} sectionUpdateKeys={effectiveUpdateKeys} selectedKeys={selectedKeys} onToggleAllInSection={onToggleAllInSection} />
-      <Table withTableBorder withColumnBorders verticalSpacing={4} horizontalSpacing="sm">
+      <Table withTableBorder withColumnBorders verticalSpacing={4} horizontalSpacing="sm" style={PREVIEW_TABLE_STYLE}>
         <Table.Thead>
           <Table.Tr>
             {selectable && <Table.Th w={40} />}
             <Table.Th><Text size="xs" fw={600}>Parameter</Text></Table.Th>
             {hasRichData && <Table.Th><Text size="xs" fw={600}>Current</Text></Table.Th>}
             {hasRichData && <Table.Th><Text size="xs" fw={600}>Incoming</Text></Table.Th>}
-            <Table.Th w={100}><Text size="xs" fw={600}>Status</Text></Table.Th>
+            <Table.Th w={STATUS_COL_WIDTH}><Text size="xs" fw={600}>Status</Text></Table.Th>
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>
@@ -687,14 +699,14 @@ function PriceBreakRows({ items, selectable, selectedKeys, onToggleKey, sectionU
   return (
     <Stack gap={4}>
       <SectionHeader label="Price Breaks" count={items.length} selectable={selectable} sectionUpdateKeys={effectiveUpdateKeys} selectedKeys={selectedKeys} onToggleAllInSection={onToggleAllInSection} />
-      <Table withTableBorder withColumnBorders verticalSpacing={4} horizontalSpacing="sm">
+      <Table withTableBorder withColumnBorders verticalSpacing={4} horizontalSpacing="sm" style={PREVIEW_TABLE_STYLE}>
         <Table.Thead>
           <Table.Tr>
             {selectable && <Table.Th w={40} />}
             <Table.Th><Text size="xs" fw={600}>Quantity</Text></Table.Th>
             {hasRichData && <Table.Th><Text size="xs" fw={600}>Current Price</Text></Table.Th>}
             {hasRichData && <Table.Th><Text size="xs" fw={600}>Incoming Price</Text></Table.Th>}
-            <Table.Th w={100}><Text size="xs" fw={600}>Status</Text></Table.Th>
+            <Table.Th w={STATUS_COL_WIDTH}><Text size="xs" fw={600}>Status</Text></Table.Th>
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>
@@ -759,14 +771,14 @@ function PartFieldRows({ items, selectable, selectedKeys, onToggleKey, sectionUp
   return (
     <Stack gap={4}>
       <SectionHeader label="Part Fields" count={items.length} selectable={selectable} sectionUpdateKeys={effectiveUpdateKeys} selectedKeys={selectedKeys} onToggleAllInSection={onToggleAllInSection} />
-      <Table withTableBorder withColumnBorders verticalSpacing={4} horizontalSpacing="sm">
+      <Table withTableBorder withColumnBorders verticalSpacing={4} horizontalSpacing="sm" style={PREVIEW_TABLE_STYLE}>
         <Table.Thead>
           <Table.Tr>
             {selectable && <Table.Th w={40} />}
             <Table.Th><Text size="xs" fw={600}>Field</Text></Table.Th>
             {hasRichData && <Table.Th><Text size="xs" fw={600}>Current</Text></Table.Th>}
             {hasRichData && <Table.Th><Text size="xs" fw={600}>Incoming</Text></Table.Th>}
-            <Table.Th w={100}><Text size="xs" fw={600}>Status</Text></Table.Th>
+            <Table.Th w={STATUS_COL_WIDTH}><Text size="xs" fw={600}>Status</Text></Table.Th>
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>
@@ -815,14 +827,14 @@ function SupplierPartRows({ items, selectable, selectedKeys, onToggleKey, sectio
   return (
     <Stack gap={4}>
       <SectionHeader label="Supplier Part" count={items.length} selectable={selectable} sectionUpdateKeys={effectiveUpdateKeys} selectedKeys={selectedKeys} onToggleAllInSection={onToggleAllInSection} />
-      <Table withTableBorder withColumnBorders verticalSpacing={4} horizontalSpacing="sm">
+      <Table withTableBorder withColumnBorders verticalSpacing={4} horizontalSpacing="sm" style={PREVIEW_TABLE_STYLE}>
         <Table.Thead>
           <Table.Tr>
             {selectable && <Table.Th w={40} />}
             <Table.Th><Text size="xs" fw={600}>Field</Text></Table.Th>
             {hasRichData && <Table.Th><Text size="xs" fw={600}>Current</Text></Table.Th>}
             {hasRichData && <Table.Th><Text size="xs" fw={600}>Incoming</Text></Table.Th>}
-            <Table.Th w={100}><Text size="xs" fw={600}>Status</Text></Table.Th>
+            <Table.Th w={STATUS_COL_WIDTH}><Text size="xs" fw={600}>Status</Text></Table.Th>
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>
@@ -871,14 +883,14 @@ function ManufacturerPartRows({ items, selectable, selectedKeys, onToggleKey, se
   return (
     <Stack gap={4}>
       <SectionHeader label="Manufacturer Part" count={items.length} selectable={selectable} sectionUpdateKeys={effectiveUpdateKeys} selectedKeys={selectedKeys} onToggleAllInSection={onToggleAllInSection} />
-      <Table withTableBorder withColumnBorders verticalSpacing={4} horizontalSpacing="sm">
+      <Table withTableBorder withColumnBorders verticalSpacing={4} horizontalSpacing="sm" style={PREVIEW_TABLE_STYLE}>
         <Table.Thead>
           <Table.Tr>
             {selectable && <Table.Th w={40} />}
             <Table.Th><Text size="xs" fw={600}>Field</Text></Table.Th>
             {hasRichData && <Table.Th><Text size="xs" fw={600}>Current</Text></Table.Th>}
             {hasRichData && <Table.Th><Text size="xs" fw={600}>Incoming</Text></Table.Th>}
-            <Table.Th w={100}><Text size="xs" fw={600}>Status</Text></Table.Th>
+            <Table.Th w={STATUS_COL_WIDTH}><Text size="xs" fw={600}>Status</Text></Table.Th>
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>
@@ -1200,7 +1212,7 @@ function EnrichPanel({ context }: { context: InvenTreePluginContext }) {
         opened={previewLoading || previewResult !== null}
         onClose={() => { if (!previewLoading && !applyLoading) setPreviewResult(null); }}
         title={previewResult ? `${previewResult.provider_name} preview` : 'Loading preview'}
-        size="80vw"
+        size="92vw"
       >
         {previewLoading && (
           <Group><Loader size="sm" /><Text>Loading preview...</Text></Group>

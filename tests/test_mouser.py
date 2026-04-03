@@ -172,6 +172,57 @@ class TestMapPartData:
     def test_returns_part_data_instance(self) -> None:
         assert isinstance(_map_part_data(MOUSER_PART_FIXTURE), PartData)
 
+    def test_packaging_excluded_from_parameters(self) -> None:
+        fixture = {
+            **MOUSER_PART_FIXTURE,
+            "ProductAttributes": [
+                {"AttributeName": "Packaging", "AttributeValue": "Tray"},
+                {"AttributeName": "Logic Family", "AttributeValue": "HC"},
+            ],
+        }
+        part = _map_part_data(fixture)
+        param_names = [p.name for p in part.parameters]
+        assert "Packaging" not in param_names
+        assert "Logic Family" in param_names
+
+    def test_single_packaging_stored_in_extra_data(self) -> None:
+        fixture = {
+            **MOUSER_PART_FIXTURE,
+            "ProductAttributes": [
+                {"AttributeName": "Packaging", "AttributeValue": "Tray"},
+            ],
+        }
+        part = _map_part_data(fixture)
+        assert part.extra_data["packaging"] == "Tray"
+
+    def test_duplicate_packaging_combined_with_semicolon(self) -> None:
+        fixture = {
+            **MOUSER_PART_FIXTURE,
+            "ProductAttributes": [
+                {"AttributeName": "Packaging", "AttributeValue": "Tray"},
+                {"AttributeName": "Packaging", "AttributeValue": "Tape & Reel"},
+                {"AttributeName": "Packaging", "AttributeValue": "Cut Tape"},
+            ],
+        }
+        part = _map_part_data(fixture)
+        assert part.extra_data["packaging"] == "Tray; Tape & Reel; Cut Tape"
+        assert "Packaging" not in [p.name for p in part.parameters]
+
+    def test_no_packaging_omits_key(self) -> None:
+        part = _map_part_data(MOUSER_PART_FIXTURE)
+        assert "packaging" not in part.extra_data
+
+    def test_empty_packaging_value_skipped(self) -> None:
+        fixture = {
+            **MOUSER_PART_FIXTURE,
+            "ProductAttributes": [
+                {"AttributeName": "Packaging", "AttributeValue": ""},
+                {"AttributeName": "Packaging", "AttributeValue": "Tray"},
+            ],
+        }
+        part = _map_part_data(fixture)
+        assert part.extra_data["packaging"] == "Tray"
+
 
 # ---------------------------------------------------------------------------
 # search_mouser

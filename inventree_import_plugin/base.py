@@ -7,7 +7,7 @@ from typing import Any
 
 from inventree_import_plugin import PLUGIN_VERSION
 from inventree_import_plugin.compat import SearchResult, Supplier
-from inventree_import_plugin.models import PartData
+from inventree_import_plugin.models import PartData, PartParameter
 
 __all__ = [
     "BaseImportPlugin",
@@ -121,6 +121,10 @@ def supplier_part_defaults(data: PartData) -> dict[str, Any]:
     if isinstance(stock, int) and stock >= 0:
         defaults["available"] = stock
 
+    packaging = data.extra_data.get("packaging")
+    if packaging:
+        defaults["packaging"] = packaging
+
     return defaults
 
 
@@ -154,7 +158,9 @@ def _download_and_set_image(part: Any, image_url: str) -> None:
     Tries multiple approaches with graceful fallback:
       1. InvenTree.helpers_model.download_image_from_url (current versions)
       2. part.set_image_from_url                    (older versions)
-      3. Manual urllib + Django ContentFile         (standalone fallback)
+      3. Validated HTTP download via requests        (standalone fallback)
+
+    Raises ``RuntimeError`` if every method fails to set an image.
     """
     # 1) InvenTree helper
     try:
@@ -172,20 +178,36 @@ def _download_and_set_image(part: Any, image_url: str) -> None:
     except (ImportError, Exception) as exc:
         logger.debug("download_image_from_url unavailable or failed: %s", exc)
 
-    # 2) Legacy method
+    # 2) Legacy method — only succeed if an image was actually set
     if hasattr(part, "set_image_from_url"):
-        part.set_image_from_url(image_url)
+        try:
+            part.set_image_from_url(image_url)
+            if getattr(part, "image", None):
+                return
+            logger.debug("set_image_from_url did not set an image")
+        except Exception as exc:
+            logger.debug("set_image_from_url failed: %s", exc)
+
+    # 3) Validated HTTP fallback via requests
+    try:
+        import requests
+        from django.core.files.base import ContentFile
+
+        response = requests.get(image_url, timeout=15)
+        response.raise_for_status()
+        content_type = response.headers.get("Content-Type", "")
+        if not content_type.startswith("image/"):
+            raise ValueError(f"Response is not an image: {content_type}")
+        data = response.content
+        if not data:
+            raise ValueError("Empty response body")
+        filename = image_url.rsplit("/", 1)[-1] or "image.jpg"
+        part.image.save(filename, ContentFile(data), save=True)
         return
+    except (ImportError, Exception) as exc:
+        logger.debug("HTTP fallback failed: %s", exc)
 
-    # 3) Manual download + Django ContentFile
-    import urllib.request
-
-    from django.core.files.base import ContentFile
-
-    filename = image_url.rsplit("/", 1)[-1] or "image.jpg"
-    with urllib.request.urlopen(image_url, timeout=15) as resp:
-        data = resp.read()
-    part.image.save(filename, ContentFile(data), save=True)
+    raise RuntimeError(f"Failed to download image from {image_url}: all methods failed")
 
 
 def _get_parameter_model_dependencies() -> tuple[Any, Any, Any | None]:
@@ -499,7 +521,7 @@ class BaseImportPlugin(_UserInterfaceMixin, _UrlsMixin, _SupplierMixin, _InvenTr
         # Datasheet link — update-on-change (external-link Part attachment)
         from common.models import Attachment
 
-        _ds_comment = "Datasheet (supplier)"
+        _ds_comment = f"Datasheet (supplier:{suppliers[0].slug})"
         _existing_ds = Attachment.objects.filter(
             model_type="part", model_id=part.pk, comment=_ds_comment
         ).first()
