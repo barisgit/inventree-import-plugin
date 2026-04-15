@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from inventree_import_plugin.providers.aliexpress import AliExpressProvider
 from inventree_import_plugin.providers.base import ProviderAdapter
 from inventree_import_plugin.providers.lcsc import LCSCProvider
 from inventree_import_plugin.providers.mouser import MouserProvider
@@ -7,6 +8,7 @@ from inventree_import_plugin.providers.mouser import MouserProvider
 _PROVIDER_ADAPTERS: tuple[ProviderAdapter, ...] = (
     LCSCProvider(),
     MouserProvider(),
+    AliExpressProvider(),
 )
 
 

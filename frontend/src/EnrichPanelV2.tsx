@@ -589,39 +589,54 @@ function AssetRows({ items, selectable, selectedKeys, onToggleKey, sectionUpdate
 } & SelectionProps) {
   if (items.length === 0) return null;
   const hasRichData = items.some((i) => i.currentValue !== null || i.incomingValue !== null);
+  const updates = items.filter((i) => i.status === 'update');
+  const skips = items.filter((i) => i.status === 'skip');
+  const rest = items.filter((i) => i.status !== 'update' && i.status !== 'skip');
+  const sorted = [...updates, ...rest, ...skips];
   const effectiveUpdateKeys = sectionUpdateKeys ?? updateKeysFromItems(items);
   return (
     <Stack gap={4}>
       <SectionHeader label="Assets" count={items.length} selectable={selectable} sectionUpdateKeys={effectiveUpdateKeys} selectedKeys={selectedKeys} onToggleAllInSection={onToggleAllInSection} />
-      <Paper withBorder radius="sm" p="xs">
-        <Stack gap={6}>
-          {items.map((item) => (
-            <Group key={item.key} justify="space-between" wrap="nowrap">
-              <Group gap="xs" wrap="nowrap">
-                {selectable && item.status === 'update' && (
-                  <Checkbox
-                    checked={selectedKeys?.has(item.key) ?? false}
-                    onChange={() => onToggleKey?.(item.key)}
-                    size="xs"
-                    aria-label={`Select ${item.label}`}
-                  />
-                )}
-                <Text size="sm">{item.label}</Text>
-              </Group>
-              {hasRichData ? (
-                <Group gap="xs" wrap="nowrap" style={{ flex: 1, minWidth: 0, justifyContent: 'flex-end' }}>
-                  <DiffValue value={item.currentValue} side="current" />
-                  <Text size="xs" c="dimmed">→</Text>
-                  <DiffValue value={item.incomingValue} side="incoming" />
-                  <StatusBadge status={item.status} />
-                </Group>
-              ) : (
-                <StatusBadge status={item.status} />
+      <Table withTableBorder withColumnBorders verticalSpacing={4} horizontalSpacing="sm" style={PREVIEW_TABLE_STYLE}>
+        <Table.Thead>
+          <Table.Tr>
+            {selectable && <Table.Th w={40} />}
+            <Table.Th><Text size="xs" fw={600}>Asset</Text></Table.Th>
+            {hasRichData && <Table.Th><Text size="xs" fw={600}>Current</Text></Table.Th>}
+            {hasRichData && <Table.Th><Text size="xs" fw={600}>Incoming</Text></Table.Th>}
+            <Table.Th w={STATUS_COL_WIDTH}><Text size="xs" fw={600}>Status</Text></Table.Th>
+          </Table.Tr>
+        </Table.Thead>
+        <Table.Tbody>
+          {sorted.map((item) => (
+            <Table.Tr
+              key={item.key}
+              bg={item.status === 'update' ? 'var(--mantine-color-green-light)' : undefined}
+            >
+              {selectable && (
+                <Table.Td>
+                  {item.status === 'update' && (
+                    <Checkbox
+                      checked={selectedKeys?.has(item.key) ?? false}
+                      onChange={() => onToggleKey?.(item.key)}
+                      size="xs"
+                      aria-label={`Select ${item.label}`}
+                    />
+                  )}
+                </Table.Td>
               )}
-            </Group>
+              <Table.Td><Text size="sm">{item.label}</Text></Table.Td>
+              {hasRichData && (
+                <Table.Td><DiffValue value={item.currentValue} side="current" /></Table.Td>
+              )}
+              {hasRichData && (
+                <Table.Td><DiffValue value={item.incomingValue} side="incoming" /></Table.Td>
+              )}
+              <Table.Td><StatusBadge status={item.status} /></Table.Td>
+            </Table.Tr>
           ))}
-        </Stack>
-      </Paper>
+        </Table.Tbody>
+      </Table>
     </Stack>
   );
 }

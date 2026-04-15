@@ -19,6 +19,9 @@ def _settings(**overrides: object):
         "MOUSER_SUPPLIER": 202,
         "MOUSER_API_KEY": "test-key",
         "MOUSER_DOWNLOAD_IMAGES": True,
+        "ALIEXPRESS_ENABLED": True,
+        "ALIEXPRESS_SUPPLIER": 303,
+        "ALIEXPRESS_DOWNLOAD_IMAGES": True,
         "BULK_BATCH_SIZE": 50,
     }
     defaults.update(overrides)
@@ -33,7 +36,7 @@ class TestCombinedPluginSuppliers:
 
         suppliers = plugin.get_suppliers()
 
-        assert [supplier.slug for supplier in suppliers] == ["lcsc", "mouser"]
+        assert [supplier.slug for supplier in suppliers] == ["lcsc", "mouser", "aliexpress"]
 
     def test_mouser_hidden_without_api_key(self) -> None:
         plugin = InvenTreeImportPlugin()
@@ -42,7 +45,7 @@ class TestCombinedPluginSuppliers:
 
         suppliers = plugin.get_suppliers()
 
-        assert [supplier.slug for supplier in suppliers] == ["lcsc"]
+        assert [supplier.slug for supplier in suppliers] == ["lcsc", "aliexpress"]
 
 
 class TestCombinedPluginUi:

@@ -23,7 +23,7 @@ class InvenTreeImportPlugin(BaseImportPlugin):
     TITLE = "Supplier Part Import"
     NAME = "InvenTreeImportPlugin"
     SLUG = "inventree-import"
-    DESCRIPTION = "Combined supplier import and enrich plugin for LCSC and Mouser"
+    DESCRIPTION = "Combined supplier import and enrich plugin for LCSC, Mouser, and AliExpress"
     VERSION = PLUGIN_VERSION
     AUTHOR = "Blaz Aristovnik"
     LICENSE = "MIT"
@@ -72,6 +72,25 @@ class InvenTreeImportPlugin(BaseImportPlugin):
         "MOUSER_DOWNLOAD_IMAGES": {
             "name": "Download Mouser Images",
             "description": "Download part images from Mouser during import and enrich",
+            "validator": bool,
+            "default": True,
+        },
+        "ALIEXPRESS_ENABLED": {
+            "name": "Enable AliExpress",
+            "description": "Expose AliExpress search and enrich features",
+            "validator": bool,
+            "default": True,
+        },
+        "ALIEXPRESS_SUPPLIER": {
+            "name": "AliExpress Supplier Company",
+            "description": "InvenTree supplier company record for AliExpress",
+            "model": "company.company",
+            "model_filters": {"is_supplier": True},
+            "required": False,
+        },
+        "ALIEXPRESS_DOWNLOAD_IMAGES": {
+            "name": "Download AliExpress Images",
+            "description": "Download part images from AliExpress during import and enrich",
             "validator": bool,
             "default": True,
         },
