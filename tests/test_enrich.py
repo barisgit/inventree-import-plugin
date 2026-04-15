@@ -1,14 +1,14 @@
 from __future__ import annotations
 
+import json
 import sys
 import types
+from collections.abc import Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Any, Sequence
+from typing import Any
 from unittest.mock import MagicMock
-
-import json
 
 import pytest
 
@@ -38,7 +38,7 @@ def runtime(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     django_db = _ensure_module(monkeypatch, "django.db")
     _ensure_module(monkeypatch, "django.contrib.contenttypes.models")
 
-    setattr(django_db, "transaction", SimpleNamespace(atomic=lambda: nullcontext()))
+    django_db.transaction = SimpleNamespace(atomic=lambda: nullcontext())  # type: ignore[attr-defined]
 
     return SimpleNamespace(
         part_models=part_models,

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 import requests as _requests
 
 from inventree_import_plugin.compat import SearchResult

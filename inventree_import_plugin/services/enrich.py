@@ -13,7 +13,6 @@ from inventree_import_plugin.base import (
     _parameter_filter_kwargs,
     _resolve_by_normalized_name,
     _save_param_with_user,
-    normalize_name,
     supplier_part_defaults,
     supplier_part_update_values,
 )
@@ -575,9 +574,13 @@ def enrich_part_for_provider(
                     errors.append(f"manufacturer_part: {exc}")
             else:
                 skipped.append("manufacturer_part:link")
-        elif dry_run and fresh.manufacturer_name and fresh.manufacturer_part_number:
-            if not getattr(supplier_part, "manufacturer_part", None):
-                updated.append("manufacturer_part:link")
+        elif (
+            dry_run
+            and fresh.manufacturer_name
+            and fresh.manufacturer_part_number
+            and not getattr(supplier_part, "manufacturer_part", None)
+        ):
+            updated.append("manufacturer_part:link")
 
         # Part description/link -- update when values differ
         _part_updates: dict[str, Any] = {}

@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import sys
 from unittest.mock import MagicMock, patch
 
-from inventree_import_plugin.models import PartData
-
 from inventree_import_plugin.core import ENRICH_PANEL_ASSET, InvenTreeImportPlugin
+from inventree_import_plugin.models import PartData
 
 
 def _settings(**overrides: object):
