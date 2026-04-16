@@ -12,6 +12,7 @@ from inventree_import_plugin.providers.aliexpress import AliExpressProvider
 from inventree_import_plugin.suppliers.aliexpress import (
     _build_part_data,
     _clean_title,
+    _extract_content_language,
     _is_generic_description,
     _parse_embedded_data,
     _parse_meta_tags,
@@ -108,9 +109,10 @@ _FIXTURE_HTML_GENERIC_DESC_NO_TITLE = (
 )
 
 
-def _mock_response(html: str) -> MagicMock:
+def _mock_response(html: str, url: str = PRODUCT_URL) -> MagicMock:
     mock = MagicMock()
     mock.text = html
+    mock.url = url
     mock.raise_for_status = MagicMock()
     return mock
 
@@ -402,6 +404,9 @@ class TestBuildPartData:
         assert len(part.price_breaks) == 3
         assert len(part.parameters) == 2
         assert part.extra_data["stock"] == 1580
+        assert part.extra_data["has_price_module"] is True
+        assert part.extra_data["has_specs_module"] is True
+        assert part.extra_data["has_quantity_module"] is True
 
     def test_no_embedded_data_still_works(self) -> None:
         part = _build_part_data("999", _FIXTURE_HTML_NO_EMBEDDED)
@@ -410,6 +415,9 @@ class TestBuildPartData:
         assert part.price_breaks == []
         assert part.parameters == []
         assert "stock" not in part.extra_data
+        assert part.extra_data["has_price_module"] is False
+        assert part.extra_data["has_specs_module"] is False
+        assert part.extra_data["has_quantity_module"] is False
 
     def test_no_title_returns_none(self) -> None:
         assert _build_part_data("999", _FIXTURE_HTML_NO_TITLE) is None
@@ -424,11 +432,11 @@ class TestBuildPartData:
         assert part.name == "ESP32 Dev Board"
         assert part.description == "ESP32 Dual Core MCU Module"
 
-    def test_generic_description_replaced_by_title(self) -> None:
+    def test_generic_description_left_empty(self) -> None:
         part = _build_part_data(PRODUCT_ID, _FIXTURE_HTML_GENERIC_DESC)
         assert part is not None
         assert part.name == "Cool Gadget"
-        assert part.description == "Cool Gadget"
+        assert part.description == ""
 
     def test_generic_description_with_no_title_returns_none(self) -> None:
         part = _build_part_data("999", _FIXTURE_HTML_GENERIC_DESC_NO_TITLE)
@@ -446,10 +454,97 @@ class TestBuildPartDataAssign:
         assert len(part.price_breaks) == 2
         assert len(part.parameters) == 2
         assert part.extra_data["stock"] == 742
+        assert part.extra_data["has_price_module"] is True
+        assert part.extra_data["has_specs_module"] is True
+        assert part.extra_data["has_quantity_module"] is True
 
     def test_returns_part_data_instance(self) -> None:
         part = _build_part_data("999888", _FIXTURE_HTML_ASSIGN)
         assert isinstance(part, PartData)
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics in extra_data
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPartDataDiagnostics:
+    def test_final_url_defaults_to_constructed_link(self) -> None:
+        part = _build_part_data("12345", _FIXTURE_HTML_NO_EMBEDDED)
+        assert part is not None
+        assert part.extra_data["final_url"] == ("https://www.aliexpress.com/item/12345.html")
+
+    def test_final_url_uses_explicit_value(self) -> None:
+        part = _build_part_data(
+            "12345",
+            _FIXTURE_HTML_NO_EMBEDDED,
+            final_url="https://redirected.aliexpress.com/item/12345.html",
+        )
+        assert part is not None
+        assert part.extra_data["final_url"] == ("https://redirected.aliexpress.com/item/12345.html")
+
+    def test_content_language_extracted_from_html_lang(self) -> None:
+        html = (
+            '<!DOCTYPE html><html lang="en">'
+            '<head><meta property="og:title" content="X"></head></html>'
+        )
+        part = _build_part_data("1", html)
+        assert part is not None
+        assert part.extra_data["content_language"] == "en"
+
+    def test_content_language_empty_when_absent(self) -> None:
+        part = _build_part_data("999", _FIXTURE_HTML_NO_EMBEDDED)
+        assert part is not None
+        assert part.extra_data["content_language"] == ""
+
+    def test_modules_present_flags_true(self) -> None:
+        part = _build_part_data(PRODUCT_ID, _FIXTURE_HTML)
+        assert part is not None
+        assert part.extra_data["has_price_module"] is True
+        assert part.extra_data["has_specs_module"] is True
+        assert part.extra_data["has_quantity_module"] is True
+
+    def test_modules_present_flags_false(self) -> None:
+        part = _build_part_data("999", _FIXTURE_HTML_NO_EMBEDDED)
+        assert part is not None
+        assert part.extra_data["has_price_module"] is False
+        assert part.extra_data["has_specs_module"] is False
+        assert part.extra_data["has_quantity_module"] is False
+
+    def test_stock_only_set_when_quantity_module_present(self) -> None:
+        part = _build_part_data("999", _FIXTURE_HTML_NO_EMBEDDED)
+        assert part is not None
+        assert "stock" not in part.extra_data
+
+    def test_no_description_fallback_to_title(self) -> None:
+        """Description stays empty when generic — no fallback to title."""
+        part = _build_part_data(PRODUCT_ID, _FIXTURE_HTML_GENERIC_DESC)
+        assert part is not None
+        assert part.description == ""
+
+
+class TestExtractContentLanguage:
+    def test_extracts_html_lang(self) -> None:
+        assert _extract_content_language('<html lang="en">') == "en"
+
+    def test_extracts_html_lang_with_attributes(self) -> None:
+        assert (
+            _extract_content_language(
+                '<html class="no-js" lang="de" dir="ltr">',
+            )
+            == "de"
+        )
+
+    def test_extracts_meta_content_language(self) -> None:
+        html = '<meta http-equiv="content-language" content="fr">'
+        assert _extract_content_language(html) == "fr"
+
+    def test_html_lang_takes_priority_over_meta(self) -> None:
+        html = '<html lang="en"><meta http-equiv="content-language" content="fr">'
+        assert _extract_content_language(html) == "en"
+
+    def test_returns_empty_for_no_language(self) -> None:
+        assert _extract_content_language("<html><body></body></html>") == ""
 
 
 # ---------------------------------------------------------------------------
@@ -468,6 +563,18 @@ class TestFetchAliExpressPart:
         assert part is not None
         assert part.sku == PRODUCT_ID
         assert part.name == "ESP32 Development Board WiFi+Bluetooth"
+        assert part.extra_data["final_url"] == PRODUCT_URL
+
+    def test_final_url_from_redirected_response(self) -> None:
+        redirected = "https://www.aliexpress.com/item/1005006274946353.html?spm=redirect"
+        with patch(
+            "inventree_import_plugin.suppliers.aliexpress.requests.get",
+            return_value=_mock_response(_FIXTURE_HTML, url=redirected),
+        ):
+            part = fetch_aliexpress_part(PRODUCT_ID)
+
+        assert part is not None
+        assert part.extra_data["final_url"] == redirected
 
     def test_returns_none_on_request_exception(self) -> None:
         with patch(

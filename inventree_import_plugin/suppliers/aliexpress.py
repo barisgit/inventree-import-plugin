@@ -33,6 +33,15 @@ _META_OG_RE = re.compile(
 )
 _CONTENT_ATTR_RE = re.compile(r'content=["\']([^"\']*)["\']', re.IGNORECASE)
 
+_LANG_ATTR_RE = re.compile(
+    r'<html[^>]*\blang=["\']([^"\']+)["\']',
+    re.IGNORECASE,
+)
+_LANG_META_RE = re.compile(
+    r'<meta[^>]*http-equiv=["\']content-language["\'][^>]*content=["\']([^"\']+)["\']',
+    re.IGNORECASE,
+)
+
 _DC_DATA_CALL_MARKER = "window._d_c_.DCData("
 _DC_DATA_ASSIGN_MARKER = "window._d_c_.DCData = "
 _BOOTSTRAP_MARKER = "window.runParams = "
@@ -177,7 +186,23 @@ def _parse_stock(data: dict[str, Any]) -> int | None:
     return None
 
 
-def _build_part_data(product_id: str, html: str) -> PartData | None:
+def _extract_content_language(html: str) -> str:
+    """Extract language from ``<html lang>`` attribute or ``content-language`` meta."""
+    match = _LANG_ATTR_RE.search(html)
+    if match:
+        return match.group(1)
+    match = _LANG_META_RE.search(html)
+    if match:
+        return match.group(1)
+    return ""
+
+
+def _build_part_data(
+    product_id: str,
+    html: str,
+    *,
+    final_url: str | None = None,
+) -> PartData | None:
     """Build a :class:`PartData` from raw AliExpress HTML.
 
     Returns ``None`` when essential data (product title) cannot be extracted.
@@ -191,16 +216,26 @@ def _build_part_data(product_id: str, html: str) -> PartData | None:
 
     raw_description = meta.get("description", "")
     description = "" if _is_generic_description(raw_description) else raw_description
-    if not description:
-        description = name
+
     image_url = meta.get("image", "")
     link = f"https://www.aliexpress.com/item/{product_id}.html"
+    resolved_url = final_url or link
 
-    price_breaks = _parse_price_breaks(embedded)
-    parameters = _parse_parameters(embedded)
-    stock = _parse_stock(embedded)
+    has_price_module = "priceModule" in embedded
+    has_specs_module = "specsModule" in embedded
+    has_quantity_module = "quantityModule" in embedded
 
-    extra_data: dict[str, Any] = {}
+    price_breaks = _parse_price_breaks(embedded) if has_price_module else []
+    parameters = _parse_parameters(embedded) if has_specs_module else []
+    stock = _parse_stock(embedded) if has_quantity_module else None
+
+    extra_data: dict[str, Any] = {
+        "final_url": resolved_url,
+        "content_language": _extract_content_language(html),
+        "has_price_module": has_price_module,
+        "has_specs_module": has_specs_module,
+        "has_quantity_module": has_quantity_module,
+    }
     if stock is not None:
         extra_data["stock"] = stock
 
@@ -232,4 +267,4 @@ def fetch_aliexpress_part(product_id: str) -> PartData | None:
         logger.error("AliExpress fetch failed for product %s: %s", product_id, exc)
         return None
 
-    return _build_part_data(product_id, response.text)
+    return _build_part_data(product_id, response.text, final_url=response.url)
