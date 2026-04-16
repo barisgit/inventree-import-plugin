@@ -11,6 +11,8 @@ from inventree_import_plugin.models import PartData, PartParameter, PriceBreak
 from inventree_import_plugin.providers.aliexpress import AliExpressProvider
 from inventree_import_plugin.suppliers.aliexpress import (
     _build_part_data,
+    _clean_title,
+    _is_generic_description,
     _parse_embedded_data,
     _parse_meta_tags,
     _parse_parameters,
@@ -77,6 +79,31 @@ _FIXTURE_HTML_NO_EMBEDDED = (
 _FIXTURE_HTML_NO_TITLE = (
     "<!DOCTYPE html><html><head>"
     '<meta property="og:image" content="https://ae01.alicdn.com/kf/img.jpg">'
+    "</head><body></body></html>"
+)
+
+_FIXTURE_HTML_TITLE_SUFFIX = (
+    "<!DOCTYPE html><html><head>"
+    '<meta property="og:title" content="ESP32 Dev Board - AliExpress 7">'
+    '<meta property="og:image" content="https://ae01.alicdn.com/kf/S123.jpg">'
+    '<meta property="og:description" content="ESP32 Dual Core MCU Module">'
+    "</head><body></body></html>"
+)
+
+_FIXTURE_HTML_GENERIC_DESC = (
+    "<!DOCTYPE html><html><head>"
+    '<meta property="og:title" content="Cool Gadget">'
+    '<meta property="og:image" content="https://ae01.alicdn.com/kf/gadget.jpg">'
+    '<meta property="og:description" content='
+    '"Smarter Shopping, Better Living! Aliexpress.com">'
+    "</head><body></body></html>"
+)
+
+_FIXTURE_HTML_GENERIC_DESC_NO_TITLE = (
+    "<!DOCTYPE html><html><head>"
+    '<meta property="og:image" content="https://ae01.alicdn.com/kf/gadget.jpg">'
+    '<meta property="og:description" content='
+    '"Smarter Shopping, Better Living! Aliexpress.com">'
     "</head><body></body></html>"
 )
 
@@ -310,6 +337,55 @@ class TestParseStock:
 
 
 # ---------------------------------------------------------------------------
+# _clean_title
+# ---------------------------------------------------------------------------
+
+
+class TestCleanTitle:
+    def test_strips_aliexpress_suffix_with_number(self) -> None:
+        assert _clean_title("ESP32 Dev Board - AliExpress 7") == "ESP32 Dev Board"
+
+    def test_strips_aliexpress_suffix_without_number(self) -> None:
+        assert _clean_title("Cool Item - AliExpress") == "Cool Item"
+
+    def test_strips_with_extra_whitespace(self) -> None:
+        assert _clean_title("Some Product  -  AliExpress 42  ") == "Some Product"
+
+    def test_no_suffix_returns_unchanged(self) -> None:
+        assert _clean_title("ESP32 Development Board WiFi+Bluetooth") == (
+            "ESP32 Development Board WiFi+Bluetooth"
+        )
+
+    def test_aliexpress_in_middle_not_stripped(self) -> None:
+        assert _clean_title("AliExpress Special Product") == "AliExpress Special Product"
+
+    def test_empty_string_stays_empty(self) -> None:
+        assert _clean_title("") == ""
+
+
+# ---------------------------------------------------------------------------
+# _is_generic_description
+# ---------------------------------------------------------------------------
+
+
+class TestIsGenericDescription:
+    def test_detects_standard_boilerplate(self) -> None:
+        assert _is_generic_description("Smarter Shopping, Better Living! Aliexpress.com")
+
+    def test_detects_without_comma(self) -> None:
+        assert _is_generic_description("Smarter Shopping Better Living! Aliexpress.com")
+
+    def test_detects_case_insensitive(self) -> None:
+        assert _is_generic_description("smarter shopping, better living! AliExpress.com")
+
+    def test_rejects_real_description(self) -> None:
+        assert not _is_generic_description("ESP32 Dual Core MCU Module")
+
+    def test_rejects_empty_string(self) -> None:
+        assert not _is_generic_description("")
+
+
+# ---------------------------------------------------------------------------
 # _build_part_data
 # ---------------------------------------------------------------------------
 
@@ -341,6 +417,22 @@ class TestBuildPartData:
     def test_returns_part_data_instance(self) -> None:
         part = _build_part_data(PRODUCT_ID, _FIXTURE_HTML)
         assert isinstance(part, PartData)
+
+    def test_title_suffix_stripped(self) -> None:
+        part = _build_part_data(PRODUCT_ID, _FIXTURE_HTML_TITLE_SUFFIX)
+        assert part is not None
+        assert part.name == "ESP32 Dev Board"
+        assert part.description == "ESP32 Dual Core MCU Module"
+
+    def test_generic_description_replaced_by_title(self) -> None:
+        part = _build_part_data(PRODUCT_ID, _FIXTURE_HTML_GENERIC_DESC)
+        assert part is not None
+        assert part.name == "Cool Gadget"
+        assert part.description == "Cool Gadget"
+
+    def test_generic_description_with_no_title_returns_none(self) -> None:
+        part = _build_part_data("999", _FIXTURE_HTML_GENERIC_DESC_NO_TITLE)
+        assert part is None
 
 
 class TestBuildPartDataAssign:

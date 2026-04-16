@@ -18,6 +18,15 @@ _ALIEXPRESS_ITEM_URL_RE = re.compile(
     re.IGNORECASE,
 )
 
+_ALIEXPRESS_TITLE_SUFFIX_RE = re.compile(
+    r"\s*-\s*AliExpress(?:\s+\d+)?\s*$",
+    re.IGNORECASE,
+)
+
+_GENERIC_DESCRIPTION_RE = re.compile(
+    r"(?i)smarter\s+shopping,?\s+better\s+living!?\s*aliexpress\.com",
+)
+
 _META_OG_RE = re.compile(
     r"<meta\s+[^>]*property=[\"']og:(\w+)[\"'][^>]*>",
     re.IGNORECASE,
@@ -46,6 +55,16 @@ def extract_product_id(term: str) -> str | None:
     """
     match = _ALIEXPRESS_ITEM_URL_RE.search(term)
     return match.group(1) if match else None
+
+
+def _clean_title(title: str) -> str:
+    """Remove trailing AliExpress suffixes like `` - AliExpress 7``."""
+    return _ALIEXPRESS_TITLE_SUFFIX_RE.sub("", title).strip()
+
+
+def _is_generic_description(text: str) -> bool:
+    """Return ``True`` when *text* is a sitewide boilerplate description."""
+    return bool(_GENERIC_DESCRIPTION_RE.search(text))
 
 
 def _parse_meta_tags(html: str) -> dict[str, str]:
@@ -166,11 +185,14 @@ def _build_part_data(product_id: str, html: str) -> PartData | None:
     meta = _parse_meta_tags(html)
     embedded = _parse_embedded_data(html)
 
-    name = meta.get("title", "")
+    name = _clean_title(meta.get("title", ""))
     if not name:
         return None
 
-    description = meta.get("description", "")
+    raw_description = meta.get("description", "")
+    description = "" if _is_generic_description(raw_description) else raw_description
+    if not description:
+        description = name
     image_url = meta.get("image", "")
     link = f"https://www.aliexpress.com/item/{product_id}.html"
 
